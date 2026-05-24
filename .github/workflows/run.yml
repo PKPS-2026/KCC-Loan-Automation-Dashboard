@@ -1,12 +1,14 @@
 name: KCC Loan Automation
 
 on:
-  workflow_dispatch:   # Manual trigger from GitHub UI
+  workflow_dispatch:   # Manual trigger from GitHub UI — only YOU can trigger this
 
 jobs:
   automate:
+    # ── Use self-hosted runner if available (no 6hr limit)
+    # ── Change to: runs-on: ubuntu-latest  for GitHub free machine
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 hours max
+    timeout-minutes: 360   # 6 hours (GitHub hosted) — no limit on self-hosted
 
     steps:
 
@@ -36,14 +38,12 @@ jobs:
         wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
           -O cloudflared
         chmod +x cloudflared
-        echo "cloudflared ready"
 
-    # ── 5. Start virtual display (Xvfb) ─────────────────────────────
+    # ── 5. Start virtual display ─────────────────────────────────────
     - name: Start virtual display
       run: |
         Xvfb :99 -screen 0 1920x1080x24 &
         sleep 2
-        echo "Xvfb started on :99"
 
     # ── 6. Start VNC + noVNC ─────────────────────────────────────────
     - name: Start VNC and noVNC
@@ -51,14 +51,16 @@ jobs:
         x11vnc -display :99 -forever -nopw -quiet &
         websockify --web /usr/share/novnc 6080 localhost:5900 &
         sleep 2
-        echo "noVNC started on port 6080"
 
-    # ── 7. Start Dashboard ───────────────────────────────────────────
+    # ── 7. Start Dashboard (with password from GitHub Secret) ────────
     - name: Start Dashboard
+      env:
+        DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        SECRET_KEY: ${{ secrets.SECRET_KEY }}
       run: |
         DISPLAY=:99 python src/dashboard.py &
         sleep 5
-        echo "Dashboard started on port 5000"
+        echo "Dashboard started with password protection ✅"
 
     # ── 8. Start Cloudflare tunnels & print URLs ─────────────────────
     - name: Start Cloudflare tunnels and show URLs
@@ -78,17 +80,17 @@ jobs:
         echo "========================================================"
         echo ""
         echo "  📊  DASHBOARD  →  $DASHBOARD_URL"
-        echo "      (Upload data + click Run Automation here)"
+        echo "      (Password protected — share with operators)"
         echo ""
         echo "  🖥️   VNC        →  $VNC_URL/vnc.html"
         echo "      (Login to fasalrin.gov.in here)"
         echo ""
-        echo "  ⚠️   URLs change every run — copy them now!"
+        echo "  🔐  PASSWORD    →  (set in GitHub Secrets)"
+        echo "  ⚠️   URLs change every run — share fresh URLs each time!"
         echo "========================================================"
 
-    # ── 9. Keep alive for 6 hours ────────────────────────────────────
+    # ── 9. Keep alive ────────────────────────────────────────────────
     - name: Keep alive
       run: |
-        echo "Automation is running... job will stay alive for 6 hours"
-        echo "Check URLs above to access dashboard and VNC"
+        echo "Automation running... staying alive"
         sleep 21600

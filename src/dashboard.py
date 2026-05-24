@@ -20,11 +20,70 @@ _check("pandas")
 _check("openpyxl")
 
 # ── imports ───────────────────────────────────────────────────────────────────
-from flask import Flask, render_template_string, request, jsonify, Response
+from flask import Flask, render_template_string, request, jsonify, Response, session, redirect, url_for
+from functools import wraps
 import pandas as pd
-import subprocess, threading, queue, json, time, io, webbrowser, socket, re, tempfile
+import subprocess, threading, queue, json, time, io, webbrowser, socket, re, tempfile, secrets
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+# ── Password (set DASHBOARD_PASSWORD env var, default: kcc@2026) ─────────────
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "kcc@2026")
+
+# ── Login required decorator ──────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("authenticated"):
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated
+
+# ── Login page HTML ───────────────────────────────────────────────────────────
+LOGIN_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>KCC Login</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<style>
+body{background:linear-gradient(135deg,#1a6b3c,#2d9e5f);min-height:100vh;
+  display:flex;align-items:center;justify-content:center;}
+.card{border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:100%;max-width:380px;}
+.card-header{background:linear-gradient(90deg,#1a6b3c,#2d9e5f);border-radius:16px 16px 0 0!important;
+  color:#fff;text-align:center;padding:24px;}
+.btn-login{background:#2d9e5f;border:none;font-weight:600;}
+.btn-login:hover{background:#1a6b3c;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="card-header">
+    <h4 class="mb-1">🏦 KCC Loan Automation</h4>
+    <small class="opacity-75">Enter password to continue</small>
+  </div>
+  <div class="card-body p-4">
+    {% if error %}
+    <div class="alert alert-danger py-2 text-center small">❌ {{ error }}</div>
+    {% endif %}
+    <form method="POST" action="/login">
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Password</label>
+        <input type="password" name="password" class="form-control form-control-lg"
+               placeholder="Enter password" autofocus required/>
+      </div>
+      <button type="submit" class="btn btn-login text-white w-100 py-2 fs-5">
+        🔐 Login
+      </button>
+    </form>
+  </div>
+</div>
+</body>
+</html>
+"""
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 # Save to a separate file so it never conflicts with loans.xlsx open in Excel
@@ -671,12 +730,34 @@ def init_state_from_df(df):
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        pwd = request.form.get("password", "")
+        if pwd == DASHBOARD_PASSWORD:
+            session["authenticated"] = True
+            return redirect("/")
+        else:
+            error = "Wrong password — try again"
+    return render_template_string(LOGIN_HTML, error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
 @app.route("/")
+@login_required
 def index():
     return render_template_string(HTML)
 
 
 @app.route("/upload", methods=["POST"])
+@login_required
 def upload():
     f = request.files.get("file")
     if not f:
@@ -697,6 +778,7 @@ def upload():
 
 
 @app.route("/paste", methods=["POST"])
+@login_required
 def paste():
     try:
         body = request.get_json(force=True) or {}
@@ -731,6 +813,7 @@ def paste():
 
 
 @app.route("/start", methods=["POST"])
+@login_required
 def start():
     if state["running"]:
         return jsonify({"error": "Already running — stop first"})
@@ -818,6 +901,7 @@ def start():
 
 
 @app.route("/stop", methods=["POST"])
+@login_required
 def stop():
     p = state.get("process")
     if p:
@@ -829,6 +913,7 @@ def stop():
 
 
 @app.route("/stream")
+@login_required
 def stream():
     def _gen():
         while True:
