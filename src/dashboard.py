@@ -683,28 +683,32 @@ function smartClean() {
   // ── Auto-convert date to DD/MM/YYYY ──────────────────────────────────
   function fixDate(val) {
     val = val.trim();
-    // Already DD/MM/YYYY
-    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
-      const p = val.split('/'); return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-    }
-    // M/D/YYYY or MM/DD/YYYY (US style: month first) → DD/MM/YYYY
+    if (!val) return val;
+
+    // Slash-separated: d/m/yyyy  or  m/d/yyyy
     if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
       const p = val.split('/');
-      // heuristic: if first number > 12, it's day; else assume US M/D/YYYY
-      if (parseInt(p[0]) > 12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-      return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
+      const a = parseInt(p[0]), b = parseInt(p[1]);
+      // b > 12  → b is definitely the DAY  → US format M/D/YYYY  e.g. 3/27/2026
+      if (b > 12) return p[1].padStart(2,'0') + '/' + p[0].padStart(2,'0') + '/' + p[2];
+      // a > 12  → a is definitely the DAY  → Indian DD/MM/YYYY  e.g. 27/03/2026
+      if (a > 12) return p[0].padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[2];
+      // Both ≤ 12 → ambiguous → keep as-is (assume DD/MM/YYYY Indian format)
+      return p[0].padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[2];
     }
-    // DD-MM-YYYY or MM-DD-YYYY
+    // Hyphen-separated: d-m-yyyy  or  m-d-yyyy
     if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(val)) {
       const p = val.split('-');
-      if (parseInt(p[0]) > 12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-      return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
+      const a = parseInt(p[0]), b = parseInt(p[1]);
+      if (b > 12) return p[1].padStart(2,'0') + '/' + p[0].padStart(2,'0') + '/' + p[2];
+      if (a > 12) return p[0].padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[2];
+      return p[0].padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[2];
     }
-    // YYYY-MM-DD (ISO)
+    // ISO: YYYY-MM-DD
     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-      const p = val.split('-'); return p[2]+'/'+p[1]+'/'+p[0];
+      const p = val.split('-'); return p[2] + '/' + p[1] + '/' + p[0];
     }
-    return val; // return as-is if unknown
+    return val; // unknown format — pass through as-is
   }
 
   // ── Map header names flexibly ─────────────────────────────────────────
