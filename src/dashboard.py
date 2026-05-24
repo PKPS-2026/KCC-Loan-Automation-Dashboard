@@ -1251,6 +1251,8 @@ def start():
 
     def _run():
         try:
+            run_env = os.environ.copy()
+            run_env["PYTHONUNBUFFERED"] = "1"   # force line-by-line stdout flush
             proc = subprocess.Popen(
                 [sys.executable, "-u", SCRIPT_PATH, state.get("save_path", UPLOAD_PATH)],
                 stdout=subprocess.PIPE,
@@ -1258,6 +1260,7 @@ def start():
                 text=True,
                 bufsize=1,
                 cwd=BASE_DIR,
+                env=run_env,
             )
             state["process"] = proc
             cur = [0]
