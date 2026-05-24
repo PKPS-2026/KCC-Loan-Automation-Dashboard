@@ -1,0 +1,73 @@
+name: KCC Data Formatter
+
+on:
+  workflow_dispatch:   # Manual trigger — only YOU can trigger this
+
+jobs:
+  formatter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # 6 hours max
+
+    steps:
+
+    # ── 1. Checkout ───────────────────────────────────────────────────────
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # ── 2. Install Python deps + cloudflared ─────────────────────────────
+    - name: Install dependencies
+      run: |
+        pip install flask pandas openpyxl
+
+        # cloudflared via official apt repo
+        curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+          | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
+          | sudo tee /etc/apt/sources.list.d/cloudflared.list
+        sudo apt-get update -qq
+        sudo apt-get install -y cloudflared
+        echo "Dependencies installed ✅"
+
+    # ── 3. Start Formatter Dashboard ─────────────────────────────────────
+    - name: Start Formatter Dashboard
+      env:
+        DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        SECRET_KEY:         ${{ secrets.SECRET_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        FORMAT_PORT:        "5001"
+      run: |
+        python src/format_dashboard.py &
+        sleep 4
+        echo "Formatter Dashboard started ✅"
+
+    # ── 4. Start Cloudflare tunnel & print URL ────────────────────────────
+    - name: Start Cloudflare tunnel and show URL
+      run: |
+        cloudflared tunnel --url http://localhost:5001 > /tmp/cf_fmt.log 2>&1 &
+
+        echo "Waiting for tunnel..."
+        sleep 20
+
+        FORMATTER_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf_fmt.log | head -1)
+
+        echo ""
+        echo "========================================================"
+        echo "  KCC DATA FORMATTER IS READY!"
+        echo "========================================================"
+        echo ""
+        echo "  FORMATTER  ->  $FORMATTER_URL"
+        echo ""
+        echo "  Use this to format your farmer data."
+        echo "  Copy the output and paste into the"
+        echo "  Automation Dashboard -> Paste from Excel tab."
+        echo ""
+        echo "  PASSWORD   ->  set in GitHub Secrets"
+        echo "  NOTE: URL changes every run — copy it now!"
+        echo "========================================================"
+
+    # ── 5. Keep alive ─────────────────────────────────────────────────────
+    - name: Keep alive
+      run: |
+        echo "Formatter is running — stays alive for 6 hours max"
+        sleep 21600
