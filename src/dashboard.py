@@ -230,6 +230,7 @@ state = {
     "process":   None,
     "statuses":  {},
     "log_queue": queue.Queue(),
+    "log_buffer": [],          # replay buffer — last 500 messages for reconnects
     "summary":   {"total": 0, "success": 0, "failed": 0, "skipped": 0, "pending": 0},
 }
 
@@ -910,16 +911,22 @@ function clearLog() { lb.innerHTML = ''; }
 
 // ── SSE stream ────────────────────────────────────────────────────────────
 let es = null;
+let streamDone = false;
+
 function startStream() {
-  if (es) es.close();
+  if (es) { es.close(); es = null; }
+  streamDone = false;
   es = new EventSource('/stream');
+
   es.onmessage = e => {
     try {
       const d = JSON.parse(e.data);
+      if (d.type === 'heartbeat') return;   // keep-alive ping, ignore
       if (d.type === 'log')     appendLog(d.text);
       if (d.type === 'status')  setRowStatus(d.idx, d.status);
       if (d.type === 'summary') updateSummary(d.summary);
-      if (d.type === 'done') {
+      if (d.type === 'done' && !streamDone) {
+        streamDone = true;
         appendLog('\n══ Automation finished ══\n');
         const btn = document.getElementById('btnRun');
         btn.disabled = false;
@@ -928,12 +935,42 @@ function startStream() {
         document.getElementById('runHint').innerHTML =
           '<i class="bi bi-check2-all text-success me-1"></i>Finished — click above to run again';
         document.getElementById('sFail2').textContent = 'Done';
-        if (es) { es.close(); es = null; }
       }
     } catch(err) {}
   };
-  es.onerror = () => { /* reconnect silently */ };
+
+  // ── Reconnect on error with backoff ──────────────────────────────────
+  let reconnectDelay = 2000;
+  es.onerror = () => {
+    es.close(); es = null;
+    appendLog('⚠️ Stream disconnected — reconnecting in ' + (reconnectDelay/1000) + 's…\n');
+    setTimeout(() => {
+      if (!streamDone) startStream();
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 15000); // max 15s backoff
+  };
 }
+
+// ── Auto-connect on page load if run is already in progress ──────────────
+window.addEventListener('DOMContentLoaded', () => {
+  fetch('/status')
+    .then(r => r.json())
+    .then(d => {
+      if (d.running) {
+        // Show stop button
+        document.getElementById('btnRun').classList.add('d-none');
+        document.getElementById('btnStop').classList.remove('d-none');
+        document.getElementById('runHint').innerHTML =
+          '<i class="bi bi-hourglass-split me-1 text-warning"></i>Running — reconnected to live stream';
+        appendLog('🔄 Reconnected to running automation…\n');
+        // Restore statuses and summary
+        if (d.statuses) Object.entries(d.statuses).forEach(([i,s]) => setRowStatus(Number(i), s));
+        if (d.summary)  updateSummary(d.summary);
+        startStream();
+      }
+    })
+    .catch(() => {});
+});
 
 // ── Start / Stop ──────────────────────────────────────────────────────────
 function startAuto() {
@@ -1184,10 +1221,18 @@ def start():
     state["statuses"] = {i: "pending" for i in range(len(state["records"]))}
     state["running"]  = True
 
-    # Flush log queue
+    # Flush log queue and clear buffer
     while not state["log_queue"].empty():
         try: state["log_queue"].get_nowait()
         except: pass
+    state["log_buffer"] = []
+
+    def _emit(msg):
+        """Put message in live queue AND replay buffer."""
+        state["log_queue"].put(msg)
+        state["log_buffer"].append(msg)
+        if len(state["log_buffer"]) > 500:
+            state["log_buffer"] = state["log_buffer"][-500:]
 
     def _run():
         try:
@@ -1205,7 +1250,7 @@ def start():
                 line = line.rstrip()
                 if not line:
                     continue
-                state["log_queue"].put(json.dumps({"type": "log", "text": line}))
+                _emit(json.dumps({"type": "log", "text": line}))
 
                 # ── V3 log patterns ──────────────────────────────────────────
                 # Record header:  "  Record 2/10  |  MALAPPA MADHAPPA HUDEDAR"
@@ -1215,16 +1260,16 @@ def start():
                         idx = int(m.group(1)) - 1
                         cur[0] = idx
                         state["statuses"][idx] = "processing"
-                        state["log_queue"].put(json.dumps({"type": "status", "idx": idx, "status": "processing"}))
-                        state["log_queue"].put(json.dumps({"type": "summary", "summary": build_summary()}))
+                        _emit(json.dumps({"type": "status", "idx": idx, "status": "processing"}))
+                        _emit(json.dumps({"type": "summary", "summary": build_summary()}))
                     except:
                         pass
 
                 # Success:  "  Record 2 saved successfully!"
                 if "saved successfully" in line or "SUBMITTED" in line:
                     state["statuses"][cur[0]] = "success"
-                    state["log_queue"].put(json.dumps({"type": "status", "idx": cur[0], "status": "success"}))
-                    state["log_queue"].put(json.dumps({"type": "summary", "summary": build_summary()}))
+                    _emit(json.dumps({"type": "status", "idx": cur[0], "status": "success"}))
+                    _emit(json.dumps({"type": "summary", "summary": build_summary()}))
 
                 # Skipped:  "  SKIPPED record 2: Aadhaar …"
                 ms = re.search(r'SKIPPED record\s+(\d+)', line)
@@ -1232,8 +1277,8 @@ def start():
                     try:
                         sidx = int(ms.group(1)) - 1
                         state["statuses"][sidx] = "skipped"
-                        state["log_queue"].put(json.dumps({"type": "status", "idx": sidx, "status": "skipped"}))
-                        state["log_queue"].put(json.dumps({"type": "summary", "summary": build_summary()}))
+                        _emit(json.dumps({"type": "status", "idx": sidx, "status": "skipped"}))
+                        _emit(json.dumps({"type": "summary", "summary": build_summary()}))
                     except:
                         pass
 
@@ -1243,17 +1288,17 @@ def start():
                     try:
                         eidx = int(me.group(1)) - 1
                         state["statuses"][eidx] = "failed"
-                        state["log_queue"].put(json.dumps({"type": "status", "idx": eidx, "status": "failed"}))
-                        state["log_queue"].put(json.dumps({"type": "summary", "summary": build_summary()}))
+                        _emit(json.dumps({"type": "status", "idx": eidx, "status": "failed"}))
+                        _emit(json.dumps({"type": "summary", "summary": build_summary()}))
                     except:
                         pass
             proc.wait()
         except Exception as e:
-            state["log_queue"].put(json.dumps({"type": "log", "text": f"❌ Runner error: {e}"}))
+            _emit(json.dumps({"type": "log", "text": f"❌ Runner error: {e}"}))
         finally:
             state["running"] = False
             state["process"] = None
-            state["log_queue"].put(json.dumps({"type": "done"}))
+            _emit(json.dumps({"type": "done"}))
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"ok": True})
@@ -1268,31 +1313,56 @@ def stop():
         except: pass
     state["running"] = False
     state["log_queue"].put(json.dumps({"type": "done"}))
+    state["log_buffer"].append(json.dumps({"type": "done"}))
     return jsonify({"ok": True})
 
 
 @app.route("/stream")
-@login_required
 def stream():
+    """SSE endpoint — no @login_required so EventSource works through Cloudflare tunnel.
+    On connect: replay buffered messages first, then stream live updates."""
     def _gen():
+        # ── 1. Replay buffer so reconnects / page refreshes get all past logs ──
+        buf_snapshot = list(state["log_buffer"])
+        for msg in buf_snapshot:
+            yield f"data: {msg}\n\n"
+
+        # ── 2. Stream live messages ───────────────────────────────────────────
         while True:
             try:
-                msg = state["log_queue"].get(timeout=25)
+                msg = state["log_queue"].get(timeout=20)
                 yield f"data: {msg}\n\n"
-                if json.loads(msg).get("type") == "done":
-                    break
+                # After 'done', keep connection alive for heartbeats (don't break)
             except queue.Empty:
                 yield 'data: {"type":"heartbeat"}\n\n'
+
     return Response(
         _gen(),
         mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 
 @app.route("/ping")
 def ping():
     return jsonify({"ok": True})
+
+
+@app.route("/status")
+@login_required
+def status():
+    """Return current run state so page-load can auto-reconnect to stream."""
+    return jsonify({
+        "running":  state["running"],
+        "statuses": state["statuses"],
+        "summary":  state["summary"],
+        "records":  state["records"],
+        "buffered": len(state["log_buffer"]),
+    })
 
 
 @app.route("/whoami")
