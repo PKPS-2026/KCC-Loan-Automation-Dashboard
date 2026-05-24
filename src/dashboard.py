@@ -24,12 +24,37 @@ from flask import Flask, render_template_string, request, jsonify, Response, ses
 from functools import wraps
 import pandas as pd
 import subprocess, threading, queue, json, time, io, webbrowser, socket, re, tempfile, secrets
+import urllib.request, urllib.parse, datetime
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
-# ── Password (set DASHBOARD_PASSWORD env var, default: kcc@2026) ─────────────
+# ── Owner info ────────────────────────────────────────────────────────────────
+OWNER_NAME  = "Kiran Karchi"
+OWNER_PHONE = os.environ.get("NOTIFY_PHONE", "9538775515")
+OWNER_EMAIL = os.environ.get("NOTIFY_EMAIL", "jkkiranor@gmail.com")
+
+# ── Password ──────────────────────────────────────────────────────────────────
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "kcc@2026")
+
+# ── Telegram notification (set BOT_TOKEN + CHAT_ID in GitHub Secrets) ────────
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+def send_telegram(msg):
+    """Send login notification via Telegram bot."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url  = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = urllib.parse.urlencode({
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg,
+            "parse_mode": "HTML"
+        }).encode()
+        urllib.request.urlopen(url, data, timeout=5)
+    except Exception as e:
+        print(f"  Telegram notify failed: {e}")
 
 # ── Login required decorator ──────────────────────────────────────────────────
 def login_required(f):
@@ -51,19 +76,21 @@ LOGIN_HTML = """
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <style>
 body{background:linear-gradient(135deg,#1a6b3c,#2d9e5f);min-height:100vh;
-  display:flex;align-items:center;justify-content:center;}
-.card{border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:100%;max-width:380px;}
+  display:flex;align-items:center;justify-content:center;flex-direction:column;}
+.card{border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:100%;max-width:400px;}
 .card-header{background:linear-gradient(90deg,#1a6b3c,#2d9e5f);border-radius:16px 16px 0 0!important;
   color:#fff;text-align:center;padding:24px;}
 .btn-login{background:#2d9e5f;border:none;font-weight:600;}
 .btn-login:hover{background:#1a6b3c;}
+.owner-badge{color:rgba(255,255,255,0.85);font-size:.8rem;margin-top:14px;text-align:center;}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="card-header">
-    <h4 class="mb-1">🏦 KCC Loan Automation</h4>
-    <small class="opacity-75">Enter password to continue</small>
+    <div style="font-size:2rem;">🏦</div>
+    <h5 class="mb-1 fw-bold">KCC Loan Automation</h5>
+    <small class="opacity-75">Powered by Kiran Karchi</small>
   </div>
   <div class="card-body p-4">
     {% if error %}
@@ -81,6 +108,7 @@ body{background:linear-gradient(135deg,#1a6b3c,#2d9e5f);min-height:100vh;
     </form>
   </div>
 </div>
+<div class="owner-badge">© 2026 Kiran Karchi &nbsp;|&nbsp; Belagavi KCC Project</div>
 </body>
 </html>
 """
@@ -195,10 +223,16 @@ body{background:#f0f4f8;font-family:'Segoe UI',sans-serif;}
 <nav class="navbar navbar-dark px-4 py-2 mb-3">
   <span class="navbar-brand fw-bold fs-6">
     <i class="bi bi-bank2 me-2"></i>KCC Loan Automation Dashboard
-    <span class="badge bg-success ms-2" style="font-size:.65rem;vertical-align:middle;">V3</span>
+    <span class="badge bg-success ms-2" style="font-size:.65rem;vertical-align:middle;">V4</span>
   </span>
-  <span class="text-white-50 small">fasalrin.gov.in &nbsp;|&nbsp;
+  <span class="text-white-50 small d-flex align-items-center gap-3">
+    <span><i class="bi bi-person-circle me-1"></i>Kiran Karchi</span>
+    <span>|</span>
     <a id="urlLink" href="#" class="text-white-50 text-decoration-none small"></a>
+    <span>|</span>
+    <a href="/logout" class="text-white-50 text-decoration-none small">
+      <i class="bi bi-box-arrow-right me-1"></i>Logout
+    </a>
   </span>
 </nav>
 
@@ -736,10 +770,31 @@ def login():
     error = None
     if request.method == "POST":
         pwd = request.form.get("password", "")
+        ip  = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
+        ua  = request.headers.get("User-Agent", "unknown")[:80]
+        now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+
         if pwd == DASHBOARD_PASSWORD:
             session["authenticated"] = True
+            # ── Notify owner on successful login ──────────────────────
+            msg = (
+                f"✅ <b>KCC Dashboard Login</b>\n"
+                f"🕐 Time   : {now}\n"
+                f"🌐 IP     : {ip}\n"
+                f"📱 Device : {ua}\n"
+                f"👤 Owner  : {OWNER_NAME}"
+            )
+            threading.Thread(target=send_telegram, args=(msg,), daemon=True).start()
             return redirect("/")
         else:
+            # ── Notify owner on failed login attempt ──────────────────
+            msg = (
+                f"❌ <b>FAILED Login Attempt</b>\n"
+                f"🕐 Time   : {now}\n"
+                f"🌐 IP     : {ip}\n"
+                f"📱 Device : {ua}"
+            )
+            threading.Thread(target=send_telegram, args=(msg,), daemon=True).start()
             error = "Wrong password — try again"
     return render_template_string(LOGIN_HTML, error=error)
 

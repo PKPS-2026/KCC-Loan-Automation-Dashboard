@@ -62,6 +62,8 @@ jobs:
       env:
         DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
         SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         DISPLAY=:99 python src/dashboard.py &
         sleep 5
