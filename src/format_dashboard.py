@@ -262,11 +262,12 @@ fetch('/whoami').then(r=>r.json()).then(d=>{
 
 let formattedRows = [];
 
-// ── Smart Format ──────────────────────────────────────────────────────────
+// ── Smart Format — calls Python server for reliable parsing ───────────────
 function smartClean() {
-  const raw = document.getElementById('rawInput').value.trim();
-  const resDiv = document.getElementById('resultMsg');
+  const raw     = document.getElementById('rawInput').value.trim();
+  const resDiv  = document.getElementById('resultMsg');
   const prevSec = document.getElementById('previewSection');
+  const btn     = document.querySelector('.btn-clean');
   resDiv.className = 'd-none mb-3';
   prevSec.classList.add('d-none');
 
@@ -276,118 +277,66 @@ function smartClean() {
     resDiv.classList.remove('d-none'); return;
   }
 
-  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length < 1) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Formatting…';
+
+  // Send raw text to Python server — parsing done in Python (reliable)
+  fetch('/format', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({raw: raw})
+  })
+  .then(r => r.json())
+  .then(d => {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-magic me-2"></i>Auto Clean &amp; Format';
+
+    if (d.error) {
+      resDiv.className = 'result-err mb-3';
+      resDiv.innerHTML = '<b>⚠️ Error:</b> ' + d.error;
+      resDiv.classList.remove('d-none'); return;
+    }
+
+    const rows = d.rows || [];
+    formattedRows = rows;
+
+    // Build preview table
+    const tbody = document.getElementById('previewBody');
+    tbody.innerHTML = rows.map((r,i) => `
+      <tr>
+        <td class="text-muted">${i+1}</td>
+        <td><code>${r['Aadhar Number']||'—'}</code></td>
+        <td><span class="badge bg-success">${r['Loan Disbursal Date']||'—'}</span></td>
+        <td>₹${Number(r['Max Withdrawal Amount (INR)']||0).toLocaleString('en-IN')}</td>
+        <td>${r['Beneficiary Name']||'—'}</td>
+      </tr>`).join('');
+
+    document.getElementById('recCount').textContent = rows.length;
+
+    // Build TSV
+    const cols = ['Aadhar Number','Loan Disbursal Date','Max Withdrawal Amount (INR)','Beneficiary Name'];
+    const tsv  = [cols.join('\t'), ...rows.map(r => cols.map(c => r[c]||'').join('\t'))].join('\n');
+    document.getElementById('tsvOutput').value = tsv;
+
+    prevSec.classList.remove('d-none');
+
+    if ((d.errors||[]).length > 0) {
+      resDiv.className = 'result-err mb-3';
+      resDiv.innerHTML = '<b>⚠️ Skipped '+(d.errors.length)+' row(s):</b> '+d.errors.join('; ');
+      resDiv.classList.remove('d-none');
+    } else {
+      resDiv.className = 'result-ok mb-3';
+      resDiv.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>'+rows.length+' records formatted successfully ✅';
+      resDiv.classList.remove('d-none');
+    }
+  })
+  .catch(e => {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-magic me-2"></i>Auto Clean &amp; Format';
     resDiv.className = 'result-err mb-3';
-    resDiv.innerHTML = 'Need at least one data row.';
-    resDiv.classList.remove('d-none'); return;
-  }
-
-  function splitLine(line) {
-    if (line.includes('\t'))  return line.split('\t').map(s => s.trim());
-    if (line.includes('|'))   return line.split('|').map(s => s.trim()).filter(s => s);
-    if (/  +/.test(line))     return line.split(/  +/).map(s => s.trim());
-    if (line.includes(','))   return line.split(',').map(s => s.trim());
-    // Smart: Aadhar(10-12 digits) + date + amount + name
-    const m = line.match(/^(\d{10,12})\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{2}[\/\-]\d{2})\s+(\d+)\s*(.+)?$/);
-    if (m) return [m[1].trim(), m[2].trim(), m[3].trim(), (m[4]||'').trim()];
-    return line.split(/\s+/).map(s => s.trim()).filter(s => s);
-  }
-
-  function fixDate(val) {
-    val = (val||'').trim();
-    if (!val) return val;
-    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
-      const p = val.split('/'); const a=parseInt(p[0]),b=parseInt(p[1]);
-      if (b>12) return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
-      if (a>12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-      return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-    }
-    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(val)) {
-      const p = val.split('-'); const a=parseInt(p[0]),b=parseInt(p[1]);
-      if (b>12) return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
-      if (a>12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-      return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-      const p = val.split('-'); return p[2]+'/'+p[1]+'/'+p[0];
-    }
-    return val;
-  }
-
-  function mapHeader(h) {
-    h = h.toLowerCase().replace(/[^a-z0-9]/g,' ').trim();
-    if (/aadh|adh/.test(h))              return 'Aadhar Number';
-    if (/date|disbursal|disb/.test(h))   return 'Loan Disbursal Date';
-    if (/amount|amt|withdrawal|max|inr/.test(h)) return 'Max Withdrawal Amount (INR)';
-    if (/name|beneficiary|farmer/.test(h)) return 'Beneficiary Name';
-    if (/account|acc/.test(h))           return 'Account Number';
-    if (/repay/.test(h))                 return 'Loan Repayment Date';
-    return null;
-  }
-
-  const headerCols = splitLine(lines[0]);
-  const colMap = headerCols.map(mapHeader);
-  const hasHeader = colMap.some(c => c !== null);
-  const fixedOrder = ['Aadhar Number','Loan Disbursal Date','Max Withdrawal Amount (INR)','Beneficiary Name'];
-  const effectiveCols = hasHeader ? colMap : fixedOrder;
-  const dataLines = hasHeader ? lines.slice(1) : lines;
-
-  const rows = []; const errors = [];
-  dataLines.forEach((line, i) => {
-    if (!line.trim()) return;
-    const cells = splitLine(line);
-    const rec = {};
-    effectiveCols.forEach((col, ci) => {
-      if (!col) return;
-      let val = (cells[ci]||'').trim();
-      if (col==='Loan Disbursal Date'||col==='Loan Repayment Date') val = fixDate(val);
-      if (col==='Max Withdrawal Amount (INR)') val = val.replace(/[^0-9.]/g,'');
-      if (col==='Aadhar Number') val = val.replace(/[^0-9]/g,'');
-      rec[col] = val;
-    });
-    if (!rec['Aadhar Number'] || rec['Aadhar Number'].length < 10) {
-      errors.push('Row '+(i+1)+': Invalid Aadhar — '+line.substring(0,40)); return;
-    }
-    rows.push(rec);
+    resDiv.innerHTML = 'Request failed: ' + e;
+    resDiv.classList.remove('d-none');
   });
-
-  if (rows.length === 0) {
-    resDiv.className = 'result-err mb-3';
-    resDiv.innerHTML = '<b>Could not parse data:</b><br>' + errors.join('<br>');
-    resDiv.classList.remove('d-none'); return;
-  }
-
-  formattedRows = rows;
-
-  // Build preview table
-  const tbody = document.getElementById('previewBody');
-  tbody.innerHTML = rows.map((r,i) => `
-    <tr>
-      <td class="text-muted">${i+1}</td>
-      <td><code>${r['Aadhar Number']||'—'}</code></td>
-      <td><span class="badge bg-success">${r['Loan Disbursal Date']||'—'}</span></td>
-      <td>₹${Number(r['Max Withdrawal Amount (INR)']||0).toLocaleString('en-IN')}</td>
-      <td>${r['Beneficiary Name']||'—'}</td>
-    </tr>`).join('');
-
-  document.getElementById('recCount').textContent = rows.length;
-
-  // Build TSV output
-  const cols = ['Aadhar Number','Loan Disbursal Date','Max Withdrawal Amount (INR)','Beneficiary Name'];
-  const tsv = [cols.join('\t'), ...rows.map(r => cols.map(c => r[c]||'').join('\t'))].join('\n');
-  document.getElementById('tsvOutput').value = tsv;
-
-  prevSec.classList.remove('d-none');
-  if (errors.length > 0) {
-    resDiv.className = 'result-err mb-3';
-    resDiv.innerHTML = '<b>⚠️ Skipped '+errors.length+' row(s):</b> '+errors.join('; ');
-    resDiv.classList.remove('d-none');
-  } else {
-    resDiv.className = 'result-ok mb-3';
-    resDiv.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>'+rows.length+' records formatted successfully ✅';
-    resDiv.classList.remove('d-none');
-  }
 }
 
 // ── Copy TSV ──────────────────────────────────────────────────────────────
@@ -467,6 +416,127 @@ def index():
 @login_required
 def whoami():
     return {"username": session.get("username","—")}
+
+
+@app.route("/format", methods=["POST"])
+@login_required
+def format_data():
+    """Parse raw pasted text → return clean structured rows (Python-side, reliable)."""
+    import re
+    try:
+        body = request.get_json(force=True) or {}
+        raw  = (body.get("raw") or "").strip()
+        if not raw:
+            return jsonify({"error": "No data received"})
+
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        if not lines:
+            return jsonify({"error": "No data found"})
+
+        # ── detect separator ─────────────────────────────────────────────────
+        def split_line(line):
+            if '\t' in line:
+                return [c.strip() for c in line.split('\t')]
+            if '|' in line:
+                return [c.strip() for c in line.split('|') if c.strip()]
+            if re.search(r'  +', line):
+                return [c.strip() for c in re.split(r'  +', line)]
+            if ',' in line:
+                return [c.strip() for c in line.split(',')]
+            # smart: 10-12 digit Aadhar + date + amount + name
+            m = re.match(
+                r'^(\d{10,12})\s+'
+                r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{4}[/\-]\d{2}[/\-]\d{2})\s+'
+                r'(\d+)\s*(.+)?$', line)
+            if m:
+                return [m.group(1), m.group(2) or '', m.group(3), (m.group(4) or '').strip()]
+            return line.split()
+
+        # ── fix date to DD/MM/YYYY ───────────────────────────────────────────
+        def fix_date(val):
+            val = val.strip()
+            if not val:
+                return val
+            # slash separated
+            m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', val)
+            if m:
+                a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
+                if len(y) == 2: y = '20' + y
+                if b > 12:   # b is day → US M/D/Y
+                    return f"{b:02d}/{a:02d}/{y}"
+                if a > 12:   # a is day → DD/MM/Y
+                    return f"{a:02d}/{b:02d}/{y}"
+                return f"{a:02d}/{b:02d}/{y}"
+            # hyphen separated
+            m = re.match(r'^(\d{1,2})-(\d{1,2})-(\d{2,4})$', val)
+            if m:
+                a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
+                if len(y) == 2: y = '20' + y
+                if b > 12: return f"{b:02d}/{a:02d}/{y}"
+                if a > 12: return f"{a:02d}/{b:02d}/{y}"
+                return f"{a:02d}/{b:02d}/{y}"
+            # ISO YYYY-MM-DD
+            m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', val)
+            if m:
+                return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+            return val
+
+        # ── map header names ─────────────────────────────────────────────────
+        def map_header(h):
+            h = re.sub(r'[^a-z0-9]', ' ', h.lower()).strip()
+            if re.search(r'aadh|adh', h):             return 'Aadhar Number'
+            if re.search(r'date|disbursal|disb', h):  return 'Loan Disbursal Date'
+            if re.search(r'amount|amt|withdrawal|max|inr', h): return 'Max Withdrawal Amount (INR)'
+            if re.search(r'name|beneficiary|farmer', h): return 'Beneficiary Name'
+            if re.search(r'account|acc', h):           return 'Account Number'
+            if re.search(r'repay', h):                 return 'Loan Repayment Date'
+            return None
+
+        FIXED_ORDER = ['Aadhar Number', 'Loan Disbursal Date',
+                       'Max Withdrawal Amount (INR)', 'Beneficiary Name']
+
+        # detect header row
+        first_cells = split_line(lines[0])
+        col_map     = [map_header(c) for c in first_cells]
+        has_header  = any(c is not None for c in col_map)
+        eff_cols    = col_map if has_header else FIXED_ORDER
+        data_lines  = lines[1:] if has_header else lines
+
+        rows, errors = [], []
+        for i, line in enumerate(data_lines):
+            if not line.strip():
+                continue
+            cells = split_line(line)
+            rec = {}
+            for ci, col in enumerate(eff_cols):
+                if not col:
+                    continue
+                val = cells[ci].strip() if ci < len(cells) else ''
+                if col in ('Loan Disbursal Date', 'Loan Repayment Date'):
+                    val = fix_date(val)
+                if col == 'Max Withdrawal Amount (INR)':
+                    val = re.sub(r'[^0-9.]', '', val)
+                if col == 'Aadhar Number':
+                    val = re.sub(r'[^0-9]', '', val)
+                rec[col] = val
+
+            aadhar = rec.get('Aadhar Number', '')
+            if len(aadhar) < 10:
+                errors.append(f"Row {i+1}: Invalid Aadhar — {line[:40]}")
+                continue
+            rows.append(rec)
+
+        if not rows:
+            return jsonify({"error": "Could not parse any valid rows. " + " | ".join(errors)})
+
+        return jsonify({
+            "rows":   rows,
+            "errors": errors,
+            "count":  len(rows),
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 @app.route("/download", methods=["POST"])
