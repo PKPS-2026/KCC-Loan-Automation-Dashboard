@@ -421,7 +421,10 @@ def whoami():
 @app.route("/format", methods=["POST"])
 @login_required
 def format_data():
-    """Parse raw pasted text → return clean structured rows (Python-side, reliable)."""
+    """Parse raw pasted text using pattern-based field extraction.
+    Each field is found by what it LOOKS like, not column position —
+    so it works with any separator, any column order, with or without headers.
+    """
     import re
     try:
         body = request.get_json(force=True) or {}
@@ -429,114 +432,88 @@ def format_data():
         if not raw:
             return jsonify({"error": "No data received"})
 
+        # ── Convert any date format → DD/MM/YYYY ─────────────────────────────
+        def fix_date(val):
+            val = val.strip()
+            if not val: return val
+            # DD/MM/YYYY or MM/DD/YYYY (slash or hyphen)
+            m = re.match(r'^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})$', val)
+            if m:
+                a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
+                if len(y) == 2: y = '20' + y
+                if b > 12: return f"{b:02d}/{a:02d}/{y}"   # US M/D/Y → D/M/Y
+                if a > 12: return f"{a:02d}/{b:02d}/{y}"   # Indian D/M/Y (confirmed)
+                return f"{a:02d}/{b:02d}/{y}"              # ambiguous → assume D/M/Y
+            # ISO YYYY-MM-DD or YYYY/MM/DD
+            m = re.match(r'^(\d{4})[/\-](\d{2})[/\-](\d{2})$', val)
+            if m: return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+            return val
+
+        # ── Skip header/label rows ────────────────────────────────────────────
+        def is_header(line):
+            lo = line.lower()
+            return bool(re.search(r'aadh|disbursal|withdrawal|beneficiary', lo))
+
+        # ── Core: extract fields by pattern from a single line ─────────────────
+        def extract(line):
+            work = line.strip()
+
+            # ① Aadhar — first 10-12 consecutive digit block
+            am = re.search(r'(?<!\d)(\d{10,12})(?!\d)', work)
+            if not am:
+                return None
+            aadhar = am.group(1)
+            work = work[:am.start()] + ' ' + work[am.end():]
+
+            # ② Date — ISO format first, then DD/MM or M/D style
+            dm = re.search(
+                r'(?<!\d)(\d{4}[/\-]\d{2}[/\-]\d{2}|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})(?!\d)',
+                work
+            )
+            date = fix_date(dm.group(1)) if dm else ''
+            if dm:
+                work = work[:dm.start()] + ' ' + work[dm.end():]
+
+            # ③ Amount — standalone 4–7 digit number (KCC loans: ₹1000–₹9999999)
+            xm = re.search(r'(?<!\d)(\d{4,7})(?!\d)', work)
+            amount = xm.group(1) if xm else ''
+            if xm:
+                work = work[:xm.start()] + ' ' + work[xm.end():]
+
+            # ④ Name — whatever letters remain after removing the other fields
+            name = re.sub(r'[^a-zA-Z\s]', ' ', work)   # keep only letters + spaces
+            name = re.sub(r'\s+', ' ', name).strip()
+
+            return {
+                'Aadhar Number':               aadhar,
+                'Loan Disbursal Date':         date,
+                'Max Withdrawal Amount (INR)': amount,
+                'Beneficiary Name':            name,
+            }
+
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
         if not lines:
             return jsonify({"error": "No data found"})
 
-        # ── detect separator ─────────────────────────────────────────────────
-        def split_line(line):
-            if '\t' in line:
-                return [c.strip() for c in line.split('\t')]
-            if '|' in line:
-                return [c.strip() for c in line.split('|') if c.strip()]
-            if re.search(r'  +', line):
-                return [c.strip() for c in re.split(r'  +', line)]
-            if ',' in line:
-                return [c.strip() for c in line.split(',')]
-            # smart: 10-12 digit Aadhar + date + amount + name
-            m = re.match(
-                r'^(\d{10,12})\s+'
-                r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{4}[/\-]\d{2}[/\-]\d{2})\s+'
-                r'(\d+)\s*(.+)?$', line)
-            if m:
-                return [m.group(1), m.group(2) or '', m.group(3), (m.group(4) or '').strip()]
-            return line.split()
-
-        # ── fix date to DD/MM/YYYY ───────────────────────────────────────────
-        def fix_date(val):
-            val = val.strip()
-            if not val:
-                return val
-            # slash separated
-            m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', val)
-            if m:
-                a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
-                if len(y) == 2: y = '20' + y
-                if b > 12:   # b is day → US M/D/Y
-                    return f"{b:02d}/{a:02d}/{y}"
-                if a > 12:   # a is day → DD/MM/Y
-                    return f"{a:02d}/{b:02d}/{y}"
-                return f"{a:02d}/{b:02d}/{y}"
-            # hyphen separated
-            m = re.match(r'^(\d{1,2})-(\d{1,2})-(\d{2,4})$', val)
-            if m:
-                a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
-                if len(y) == 2: y = '20' + y
-                if b > 12: return f"{b:02d}/{a:02d}/{y}"
-                if a > 12: return f"{a:02d}/{b:02d}/{y}"
-                return f"{a:02d}/{b:02d}/{y}"
-            # ISO YYYY-MM-DD
-            m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', val)
-            if m:
-                return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
-            return val
-
-        # ── map header names ─────────────────────────────────────────────────
-        def map_header(h):
-            h = re.sub(r'[^a-z0-9]', ' ', h.lower()).strip()
-            if re.search(r'aadh|adh', h):             return 'Aadhar Number'
-            if re.search(r'date|disbursal|disb', h):  return 'Loan Disbursal Date'
-            if re.search(r'amount|amt|withdrawal|max|inr', h): return 'Max Withdrawal Amount (INR)'
-            if re.search(r'name|beneficiary|farmer', h): return 'Beneficiary Name'
-            if re.search(r'account|acc', h):           return 'Account Number'
-            if re.search(r'repay', h):                 return 'Loan Repayment Date'
-            return None
-
-        FIXED_ORDER = ['Aadhar Number', 'Loan Disbursal Date',
-                       'Max Withdrawal Amount (INR)', 'Beneficiary Name']
-
-        # detect header row
-        first_cells = split_line(lines[0])
-        col_map     = [map_header(c) for c in first_cells]
-        has_header  = any(c is not None for c in col_map)
-        eff_cols    = col_map if has_header else FIXED_ORDER
-        data_lines  = lines[1:] if has_header else lines
-
         rows, errors = [], []
-        for i, line in enumerate(data_lines):
-            if not line.strip():
-                continue
-            cells = split_line(line)
-            rec = {}
-            for ci, col in enumerate(eff_cols):
-                if not col:
-                    continue
-                val = cells[ci].strip() if ci < len(cells) else ''
-                if col in ('Loan Disbursal Date', 'Loan Repayment Date'):
-                    val = fix_date(val)
-                if col == 'Max Withdrawal Amount (INR)':
-                    val = re.sub(r'[^0-9.]', '', val)
-                if col == 'Aadhar Number':
-                    val = re.sub(r'[^0-9]', '', val)
-                rec[col] = val
-
-            aadhar = rec.get('Aadhar Number', '')
-            if len(aadhar) < 10:
-                errors.append(f"Row {i+1}: Invalid Aadhar — {line[:40]}")
+        for i, line in enumerate(lines):
+            if is_header(line):
+                continue            # silently skip header rows
+            rec = extract(line)
+            if rec is None or len(rec.get('Aadhar Number', '')) < 10:
+                errors.append(f"Row {i+1}: Aadhar not found — {line[:50]}")
                 continue
             rows.append(rec)
 
         if not rows:
-            return jsonify({"error": "Could not parse any valid rows. " + " | ".join(errors)})
+            return jsonify({"error": "Could not parse any valid rows. " +
+                            " | ".join(errors[:3])})
 
-        return jsonify({
-            "rows":   rows,
-            "errors": errors,
-            "count":  len(rows),
-        })
+        return jsonify({"rows": rows, "errors": errors, "count": len(rows)})
 
     except Exception as e:
-        return jsonify({"error": str(e)})
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()})
 
 
 @app.route("/download", methods=["POST"])
