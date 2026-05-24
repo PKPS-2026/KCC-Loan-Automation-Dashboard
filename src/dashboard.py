@@ -77,7 +77,11 @@ LOGIN_HTML = """
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;}
-body{background:linear-gradient(135deg,#0f4c2a 0%,#1a6b3c 50%,#2d9e5f 100%);
+body{
+  background:
+    linear-gradient(135deg,rgba(10,40,18,.72) 0%,rgba(15,76,42,.65) 50%,rgba(20,100,55,.60) 100%),
+    url('https://images.unsplash.com/photo-1625246333195-78d9c38ad449?auto=format&fit=crop&w=1920&q=80')
+    center center / cover no-repeat fixed;
   min-height:100vh;display:flex;align-items:center;justify-content:center;
   flex-direction:column;padding:20px;}
 
@@ -139,11 +143,11 @@ body{background:linear-gradient(135deg,#0f4c2a 0%,#1a6b3c 50%,#2d9e5f 100%);
     </span>
     <span class="team-chip">
       <i class="bi bi-person text-secondary"></i>
-      Mahadev Vadeyar <span class="role ms-1">Operator</span>
+      Mahadev Vadeyar <span class="role ms-1">Co-ordinator</span>
     </span>
     <span class="team-chip">
       <i class="bi bi-person text-secondary"></i>
-      Avinash Dugnavar <span class="role ms-1">Operator</span>
+      Avinash Dugnavar <span class="role ms-1">Co-ordinator</span>
     </span>
   </div>
 
@@ -166,8 +170,8 @@ body{background:linear-gradient(135deg,#0f4c2a 0%,#1a6b3c 50%,#2d9e5f 100%);
           <option value="" disabled selected>-- Select your name --</option>
           <option value="Kiran Karchi">👑 Kiran Karchi (Owner)</option>
           <option value="Mahanthesh Hiremath">🗂️ Mahanthesh Hiremath (Manager)</option>
-          <option value="Mahadev Vadeyar">📋 Mahadev Vadeyar (Operator)</option>
-          <option value="Avinash Dugnavar">📋 Avinash Dugnavar (Operator)</option>
+          <option value="Mahadev Vadeyar">📋 Mahadev Vadeyar (Co-ordinator)</option>
+          <option value="Avinash Dugnavar">📋 Avinash Dugnavar (Co-ordinator)</option>
         </select>
       </div>
 
@@ -240,9 +244,16 @@ HTML = r"""
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet"/>
 <style>
-body{background:#f0f4f8;font-family:'Segoe UI',sans-serif;}
+body{
+  background:
+    linear-gradient(135deg,rgba(10,40,18,.55) 0%,rgba(15,76,42,.45) 50%,rgba(20,100,55,.40) 100%),
+    url('https://images.unsplash.com/photo-1625246333195-78d9c38ad449?auto=format&fit=crop&w=1920&q=80')
+    center center / cover no-repeat fixed;
+  font-family:'Segoe UI',sans-serif;
+  min-height:100vh;
+}
 .navbar{background:linear-gradient(90deg,#1a6b3c,#2d9e5f);}
-.card{border:none;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08);}
+.card{border:none;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.25);background:rgba(255,255,255,.93);}
 .card-header{border-radius:12px 12px 0 0!important;font-weight:600;}
 
 /* tabs */
