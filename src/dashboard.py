@@ -356,6 +356,11 @@ body{
               <i class="bi bi-clipboard-data text-primary me-1"></i>Paste from Excel
             </button>
           </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-smart" onclick="switchTab('smart')">
+              <i class="bi bi-magic text-warning me-1"></i>Smart Format
+            </button>
+          </li>
         </ul>
       </div>
       <div class="card-body d-flex flex-column">
@@ -384,6 +389,53 @@ body{
                   onclick="loadPaste()">
             <i class="bi bi-check2-circle me-1"></i>Load Data
           </button>
+        </div>
+
+        <!-- Smart Format pane -->
+        <div id="pane-smart" class="d-none">
+          <p class="text-muted small mb-2">
+            <i class="bi bi-magic text-warning me-1"></i>
+            Paste data in <strong>any format</strong> — WhatsApp, Excel, space-separated, any date style.
+            Click <strong>Auto Clean</strong> and it fixes everything automatically.
+          </p>
+          <textarea id="smartArea" class="form-control" rows="5"
+            style="font-size:.8rem;resize:vertical;"
+            placeholder="Paste raw data here in any format...&#10;&#10;Example:&#10;295381719280  27/03/2026  53000  Madagouda Siddappa&#10;300915264220  3/27/2026   49000  Makhabhul K Mulla"></textarea>
+          <button class="btn btn-warning w-100 mt-2 fw-semibold py-2 text-dark"
+                  onclick="smartClean()">
+            <i class="bi bi-magic me-1"></i>Auto Clean &amp; Format
+          </button>
+          <!-- Preview table -->
+          <div id="smartPreview" class="d-none mt-3">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <span class="fw-semibold small text-success">
+                <i class="bi bi-check-circle-fill me-1"></i>
+                <span id="smartCount"></span> records formatted
+              </span>
+              <button class="btn btn-success btn-sm fw-semibold"
+                      onclick="loadSmart()">
+                <i class="bi bi-check2-circle me-1"></i>Load to Automation
+              </button>
+            </div>
+            <div style="max-height:160px;overflow-y:auto;border-radius:8px;border:1px solid #c8e6c9;">
+              <table class="table table-sm table-hover mb-0" style="font-size:.75rem;">
+                <thead style="background:#1a6b3c;color:#fff;position:sticky;top:0;">
+                  <tr>
+                    <th>#</th>
+                    <th>Aadhar Number</th>
+                    <th>Disbursal Date</th>
+                    <th>Amount (INR)</th>
+                    <th>Beneficiary Name</th>
+                  </tr>
+                </thead>
+                <tbody id="smartTbody"></tbody>
+              </table>
+            </div>
+            <!-- Formatted text (hidden, used for loadPaste) -->
+            <textarea id="smartFormatted" class="d-none"></textarea>
+          </div>
+          <!-- Errors -->
+          <div id="smartErrors" class="d-none mt-2 alert alert-danger py-2 px-3 small"></div>
         </div>
 
         <!-- Validation panel -->
@@ -534,7 +586,7 @@ fetch('/whoami').then(r=>r.json()).then(d=>{
 
 // ── Tab switch ────────────────────────────────────────────────────────────
 function switchTab(tab) {
-  ['file','paste'].forEach(t => {
+  ['file','paste','smart'].forEach(t => {
     document.getElementById('pane-'+t).classList.toggle('d-none', t !== tab);
     document.getElementById('tab-'+t).classList.toggle('active',  t === tab);
   });
@@ -592,6 +644,148 @@ function loadPaste() {
       applyResult(d, '📋 Pasted data');
     })
     .catch(e => alert('Paste failed: ' + e));
+}
+
+// ── Smart Format Cleaner ──────────────────────────────────────────────────
+function smartClean() {
+  const raw = document.getElementById('smartArea').value.trim();
+  const errDiv  = document.getElementById('smartErrors');
+  const prevDiv = document.getElementById('smartPreview');
+  errDiv.classList.add('d-none');
+  prevDiv.classList.add('d-none');
+
+  if (!raw) { errDiv.textContent = '⚠️ Please paste some data first.'; errDiv.classList.remove('d-none'); return; }
+
+  // ── Detect separator: tab > pipe > 2+ spaces > comma ─────────────────
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length < 2) { errDiv.textContent = '⚠️ Need at least a header row + 1 data row.'; errDiv.classList.remove('d-none'); return; }
+
+  function splitLine(line) {
+    if (line.includes('\t'))       return line.split('\t').map(s => s.trim());
+    if (line.includes('|'))        return line.split('|').map(s => s.trim()).filter(s=>s);
+    if (/  +/.test(line))          return line.split(/  +/).map(s => s.trim());
+    if (line.includes(','))        return line.split(',').map(s => s.trim());
+    return line.split(/\s{2,}/).map(s => s.trim());
+  }
+
+  // ── Auto-convert date to DD/MM/YYYY ──────────────────────────────────
+  function fixDate(val) {
+    val = val.trim();
+    // Already DD/MM/YYYY
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
+      const p = val.split('/'); return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
+    }
+    // M/D/YYYY or MM/DD/YYYY (US style: month first) → DD/MM/YYYY
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
+      const p = val.split('/');
+      // heuristic: if first number > 12, it's day; else assume US M/D/YYYY
+      if (parseInt(p[0]) > 12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
+      return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
+    }
+    // DD-MM-YYYY or MM-DD-YYYY
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(val)) {
+      const p = val.split('-');
+      if (parseInt(p[0]) > 12) return p[0].padStart(2,'0')+'/'+p[1].padStart(2,'0')+'/'+p[2];
+      return p[1].padStart(2,'0')+'/'+p[0].padStart(2,'0')+'/'+p[2];
+    }
+    // YYYY-MM-DD (ISO)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+      const p = val.split('-'); return p[2]+'/'+p[1]+'/'+p[0];
+    }
+    return val; // return as-is if unknown
+  }
+
+  // ── Map header names flexibly ─────────────────────────────────────────
+  function mapHeader(h) {
+    h = h.toLowerCase().replace(/[^a-z0-9]/g,' ').trim();
+    if (/aadh|adh/.test(h))         return 'Aadhar Number';
+    if (/date|disbursal|disb/.test(h)) return 'Loan Disbursal Date';
+    if (/amount|amt|withdrawal|max|inr/.test(h)) return 'Max Withdrawal Amount (INR)';
+    if (/name|beneficiary|farmer|benef/.test(h)) return 'Beneficiary Name';
+    if (/account|acc/.test(h))       return 'Account Number';
+    if (/repay|repayment/.test(h))   return 'Loan Repayment Date';
+    return null;
+  }
+
+  // ── Parse header row ──────────────────────────────────────────────────
+  const headerCols = splitLine(lines[0]);
+  const colMap = headerCols.map(mapHeader);
+  const hasHeader = colMap.some(c => c !== null);
+
+  let dataLines = hasHeader ? lines.slice(1) : lines;
+  // If no header detected, assume fixed order: Aadhar, Date, Amount, Name
+  const fixedOrder = ['Aadhar Number','Loan Disbursal Date','Max Withdrawal Amount (INR)','Beneficiary Name'];
+  const effectiveCols = hasHeader ? colMap : fixedOrder;
+
+  const rows = [];
+  const errors = [];
+
+  dataLines.forEach((line, i) => {
+    if (!line.trim()) return;
+    const cells = splitLine(line);
+    const rec = {};
+    effectiveCols.forEach((col, ci) => {
+      if (!col) return;
+      let val = (cells[ci] || '').trim();
+      if (col === 'Loan Disbursal Date' || col === 'Loan Repayment Date') val = fixDate(val);
+      if (col === 'Max Withdrawal Amount (INR)') val = val.replace(/[^0-9.]/g,'');
+      if (col === 'Aadhar Number') val = val.replace(/[^0-9]/g,'');
+      rec[col] = val;
+    });
+    // Validate essentials
+    if (!rec['Aadhar Number'] || rec['Aadhar Number'].length < 10) {
+      errors.push('Row '+(i+1)+': Invalid Aadhar Number — '+line.substring(0,40));
+      return;
+    }
+    rows.push(rec);
+  });
+
+  if (errors.length > 0 && rows.length === 0) {
+    errDiv.innerHTML = '<b>⚠️ Could not parse data:</b><br>' + errors.join('<br>');
+    errDiv.classList.remove('d-none'); return;
+  }
+
+  // ── Build preview table ───────────────────────────────────────────────
+  const tbody = document.getElementById('smartTbody');
+  tbody.innerHTML = rows.map((r,i) => `
+    <tr>
+      <td class="text-muted">${i+1}</td>
+      <td><code>${r['Aadhar Number']||'—'}</code></td>
+      <td>${r['Loan Disbursal Date']||'—'}</td>
+      <td>₹${Number(r['Max Withdrawal Amount (INR)']||0).toLocaleString('en-IN')}</td>
+      <td>${r['Beneficiary Name']||'—'}</td>
+    </tr>`).join('');
+  document.getElementById('smartCount').textContent = rows.length;
+
+  // ── Build formatted TSV for loadPaste ────────────────────────────────
+  const allCols = ['Aadhar Number','Loan Disbursal Date','Max Withdrawal Amount (INR)','Beneficiary Name','Account Number','Loan Repayment Date'];
+  const usedCols = allCols.filter(c => rows.some(r => r[c]));
+  const tsv = [usedCols.join('\t'), ...rows.map(r => usedCols.map(c => r[c]||'').join('\t'))].join('\n');
+  document.getElementById('smartFormatted').value = tsv;
+
+  prevDiv.classList.remove('d-none');
+  if (errors.length > 0) {
+    errDiv.innerHTML = '<b>⚠️ Skipped '+errors.length+' row(s):</b><br>' + errors.join('<br>');
+    errDiv.classList.remove('d-none');
+  }
+}
+
+// ── Load smart-formatted data into automation ─────────────────────────────
+function loadSmart() {
+  const tsv = document.getElementById('smartFormatted').value;
+  if (!tsv) return;
+  fetch('/paste', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: tsv })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert('❌ Load error:\n' + d.error); return; }
+      applyResult(d, '🧹 Smart formatted data');
+      switchTab('file'); // go back to main view
+    })
+    .catch(e => alert('Load failed: ' + e));
 }
 
 // ── After successful load ─────────────────────────────────────────────────
