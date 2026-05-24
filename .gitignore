@@ -1,19 +1,20 @@
 # Credentials — never commit
-config.py
+config/config.py
 
 # Large auto-downloaded binary
 cloudflared.exe
+src/cloudflared.exe
 
 # Excel files with real farmer/Aadhaar data (PII)
-loans.xlsx
-loans_upload.xlsx
 *.xlsx
+uploads/
 
-# Temp files
+# Temp / cache
 __pycache__/
 *.pyc
 *.pyo
 *.tmp
+*.log
 
 # OS
 .DS_Store

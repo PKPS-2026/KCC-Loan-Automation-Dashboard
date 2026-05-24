@@ -31,8 +31,9 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_PATH = os.path.join(BASE_DIR, "loans_upload.xlsx")
 SCRIPT_PATH = os.path.join(BASE_DIR, "PR_V4.py")
 
-# ── ngrok config — loaded from config.py (gitignored, stays local) ───────────
+# ── ngrok config — loaded from config/config.py (gitignored, stays local) ────
 try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'config'))
     from config import NGROK_AUTH_TOKEN, NGROK_STATIC_DOMAIN
 except ImportError:
     NGROK_AUTH_TOKEN    = ""
