@@ -659,14 +659,25 @@ function smartClean() {
 
   // ── Detect separator: tab > pipe > 2+ spaces > comma ─────────────────
   const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length < 2) { errDiv.textContent = '⚠️ Need at least a header row + 1 data row.'; errDiv.classList.remove('d-none'); return; }
+  if (lines.length < 1) { errDiv.textContent = '⚠️ Please paste at least one data row.'; errDiv.classList.remove('d-none'); return; }
 
   function splitLine(line) {
-    if (line.includes('\t'))       return line.split('\t').map(s => s.trim());
-    if (line.includes('|'))        return line.split('|').map(s => s.trim()).filter(s=>s);
-    if (/  +/.test(line))          return line.split(/  +/).map(s => s.trim());
-    if (line.includes(','))        return line.split(',').map(s => s.trim());
-    return line.split(/\s{2,}/).map(s => s.trim());
+    // Tab (Excel copy-paste)
+    if (line.includes('\t'))  return line.split('\t').map(s => s.trim());
+    // Pipe separated
+    if (line.includes('|'))   return line.split('|').map(s => s.trim()).filter(s => s);
+    // 2+ spaces
+    if (/  +/.test(line))     return line.split(/  +/).map(s => s.trim());
+    // Comma separated
+    if (line.includes(','))   return line.split(',').map(s => s.trim());
+
+    // ── Smart single-space: Aadhar(10-12 digits) + date + amount + name ──
+    // Handles: "295381719280 3/27/2026 53000 Madagouda Siddappa Odeyar"
+    const m = line.match(/^(\d{10,12})\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{2}[\/\-]\d{2})\s+(\d+)\s*(.+)?$/);
+    if (m) return [m[1].trim(), m[2].trim(), m[3].trim(), (m[4]||'').trim()];
+
+    // Fallback: split on any whitespace
+    return line.split(/\s+/).map(s => s.trim()).filter(s => s);
   }
 
   // ── Auto-convert date to DD/MM/YYYY ──────────────────────────────────
