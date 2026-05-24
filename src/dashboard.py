@@ -924,64 +924,77 @@ function appendLog(t) {
 }
 function clearLog() { lb.innerHTML = ''; }
 
-// ── SSE stream ────────────────────────────────────────────────────────────
-let es = null;
-let streamDone = false;
+// ── Log Polling (replaces SSE — works through Cloudflare tunnel) ──────────
+let pollTimer   = null;
+let pollOffset  = 0;
+let pollDone    = false;
 
 function startStream() {
-  if (es) { es.close(); es = null; }
-  streamDone = false;
-  es = new EventSource('/stream');
-
-  es.onmessage = e => {
-    try {
-      const d = JSON.parse(e.data);
-      if (d.type === 'heartbeat') return;   // keep-alive ping, ignore
-      if (d.type === 'log')     appendLog(d.text);
-      if (d.type === 'status')  setRowStatus(d.idx, d.status);
-      if (d.type === 'summary') updateSummary(d.summary);
-      if (d.type === 'done' && !streamDone) {
-        streamDone = true;
-        appendLog('\n══ Automation finished ══\n');
-        const btn = document.getElementById('btnRun');
-        btn.disabled = false;
-        btn.classList.remove('d-none');
-        document.getElementById('btnStop').classList.add('d-none');
-        document.getElementById('runHint').innerHTML =
-          '<i class="bi bi-check2-all text-success me-1"></i>Finished — click above to run again';
-        document.getElementById('sFail2').textContent = 'Done';
-      }
-    } catch(err) {}
-  };
-
-  // ── Reconnect on error with backoff ──────────────────────────────────
-  let reconnectDelay = 2000;
-  es.onerror = () => {
-    es.close(); es = null;
-    appendLog('⚠️ Stream disconnected — reconnecting in ' + (reconnectDelay/1000) + 's…\n');
-    setTimeout(() => {
-      if (!streamDone) startStream();
-    }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 15000); // max 15s backoff
-  };
+  // Called by startAuto() — reset offset and start polling
+  pollOffset = 0;
+  pollDone   = false;
+  _schedulePoll(300);   // first poll after 300ms
 }
 
-// ── Auto-connect on page load if run is already in progress ──────────────
-window.addEventListener('DOMContentLoaded', () => {
-  fetch('/status')
+function _schedulePoll(delay) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(_doPoll, delay);
+}
+
+function _doPoll() {
+  fetch('/logs?offset=' + pollOffset)
     .then(r => r.json())
     .then(d => {
-      if (d.running) {
-        // Show stop button
+      // Process new entries
+      (d.entries || []).forEach(msg => {
+        try {
+          const ev = JSON.parse(msg);
+          if (ev.type === 'log')     appendLog(ev.text);
+          if (ev.type === 'status')  setRowStatus(ev.idx, ev.status);
+          if (ev.type === 'summary') updateSummary(ev.summary);
+          if (ev.type === 'done' && !pollDone) {
+            pollDone = true;
+            appendLog('\n══ Automation finished ══\n');
+            const btn = document.getElementById('btnRun');
+            btn.disabled = false;
+            btn.classList.remove('d-none');
+            document.getElementById('btnStop').classList.add('d-none');
+            document.getElementById('runHint').innerHTML =
+              '<i class="bi bi-check2-all text-success me-1"></i>Finished — click above to run again';
+            document.getElementById('sFail2').textContent = 'Done';
+          }
+        } catch(e) {}
+      });
+      pollOffset = d.offset || pollOffset;
+
+      // Keep polling while running, or while there are new entries
+      if (!pollDone && (d.running || (d.entries||[]).length > 0)) {
+        _schedulePoll(1500);   // poll every 1.5 s while running
+      } else if (!pollDone && !d.running) {
+        _schedulePoll(3000);   // slower poll when idle (catch late done event)
+      }
+    })
+    .catch(() => {
+      if (!pollDone) _schedulePoll(3000);  // retry on error
+    });
+}
+
+// ── Auto-reconnect on page load if run is already in progress ────────────
+window.addEventListener('DOMContentLoaded', () => {
+  fetch('/logs?offset=0')
+    .then(r => r.json())
+    .then(d => {
+      if (d.running || (d.entries||[]).length > 0) {
         document.getElementById('btnRun').classList.add('d-none');
         document.getElementById('btnStop').classList.remove('d-none');
         document.getElementById('runHint').innerHTML =
-          '<i class="bi bi-hourglass-split me-1 text-warning"></i>Running — reconnected to live stream';
+          '<i class="bi bi-hourglass-split me-1 text-warning"></i>Running — reconnected to live log';
         appendLog('🔄 Reconnected to running automation…\n');
-        // Restore statuses and summary
         if (d.statuses) Object.entries(d.statuses).forEach(([i,s]) => setRowStatus(Number(i), s));
         if (d.summary)  updateSummary(d.summary);
-        startStream();
+        pollOffset = 0;
+        pollDone   = false;
+        _schedulePoll(200);
       }
     })
     .catch(() => {});
@@ -1335,34 +1348,25 @@ def stop():
     return jsonify({"ok": True})
 
 
-@app.route("/stream")
-def stream():
-    """SSE endpoint — no @login_required so EventSource works through Cloudflare tunnel.
-    On connect: replay buffered messages first, then stream live updates."""
-    def _gen():
-        # ── 1. Replay buffer so reconnects / page refreshes get all past logs ──
-        buf_snapshot = list(state["log_buffer"])
-        for msg in buf_snapshot:
-            yield f"data: {msg}\n\n"
-
-        # ── 2. Stream live messages ───────────────────────────────────────────
-        while True:
-            try:
-                msg = state["log_queue"].get(timeout=20)
-                yield f"data: {msg}\n\n"
-                # After 'done', keep connection alive for heartbeats (don't break)
-            except queue.Empty:
-                yield 'data: {"type":"heartbeat"}\n\n'
-
-    return Response(
-        _gen(),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
+@app.route("/logs")
+def logs():
+    """Polling endpoint — returns log buffer entries from offset onwards.
+    Works reliably through Cloudflare tunnel (no SSE buffering issues).
+    Browser polls every 1.5 s: GET /logs?offset=N
+    """
+    try:
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        offset = 0
+    entries = list(state["log_buffer"])
+    new_entries = entries[offset:]
+    return jsonify({
+        "entries":  new_entries,
+        "offset":   offset + len(new_entries),
+        "running":  state["running"],
+        "statuses": state["statuses"],
+        "summary":  state["summary"],
+    })
 
 
 @app.route("/ping")
