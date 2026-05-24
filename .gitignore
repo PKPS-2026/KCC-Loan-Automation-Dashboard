@@ -1,0 +1,20 @@
+# Credentials — never commit
+config.py
+
+# Large auto-downloaded binary
+cloudflared.exe
+
+# Excel files with real farmer/Aadhaar data (PII)
+loans.xlsx
+loans_upload.xlsx
+*.xlsx
+
+# Temp files
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
