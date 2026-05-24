@@ -72,43 +72,126 @@ LOGIN_HTML = """
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>KCC Login</title>
+<title>KCC Login — Kiran Karchi</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet"/>
 <style>
-body{background:linear-gradient(135deg,#1a6b3c,#2d9e5f);min-height:100vh;
-  display:flex;align-items:center;justify-content:center;flex-direction:column;}
-.card{border:none;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:100%;max-width:400px;}
-.card-header{background:linear-gradient(90deg,#1a6b3c,#2d9e5f);border-radius:16px 16px 0 0!important;
-  color:#fff;text-align:center;padding:24px;}
-.btn-login{background:#2d9e5f;border:none;font-weight:600;}
-.btn-login:hover{background:#1a6b3c;}
-.owner-badge{color:rgba(255,255,255,0.85);font-size:.8rem;margin-top:14px;text-align:center;}
+*{box-sizing:border-box;}
+body{background:linear-gradient(135deg,#0f4c2a 0%,#1a6b3c 50%,#2d9e5f 100%);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;padding:20px;}
+
+.login-card{border:none;border-radius:20px;box-shadow:0 16px 48px rgba(0,0,0,.3);
+  width:100%;max-width:440px;overflow:hidden;}
+
+/* Header */
+.login-header{background:linear-gradient(135deg,#0f4c2a,#1a6b3c);
+  color:#fff;text-align:center;padding:28px 24px 20px;}
+.login-header .logo{font-size:2.5rem;margin-bottom:6px;}
+.login-header h4{font-weight:800;margin:0;letter-spacing:.5px;}
+.login-header .sub{opacity:.8;font-size:.85rem;margin-top:4px;}
+
+/* Team strip */
+.team-strip{background:#f8fdf9;border-bottom:1px solid #e0f0e8;
+  padding:14px 20px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center;}
+.team-chip{display:inline-flex;align-items:center;gap:6px;
+  background:#fff;border:1px solid #c8e6c9;border-radius:20px;
+  padding:4px 12px;font-size:.75rem;color:#1a6b3c;font-weight:600;}
+.team-chip .role{color:#888;font-weight:400;font-size:.7rem;}
+
+/* Body */
+.login-body{padding:24px;}
+.form-select,.form-control{border-radius:10px;border:1.5px solid #dee2e6;
+  padding:10px 14px;font-size:.95rem;}
+.form-select:focus,.form-control:focus{border-color:#2d9e5f;
+  box-shadow:0 0 0 3px rgba(45,158,95,.15);}
+.btn-login{background:linear-gradient(90deg,#1a6b3c,#2d9e5f);border:none;
+  border-radius:10px;font-weight:700;font-size:1rem;padding:12px;
+  letter-spacing:.3px;transition:.2s;}
+.btn-login:hover{background:linear-gradient(90deg,#0f4c2a,#1a6b3c);transform:translateY(-1px);}
+
+/* Footer */
+.login-footer{text-align:center;color:rgba(255,255,255,.75);
+  font-size:.78rem;margin-top:18px;line-height:1.8;}
+.login-footer strong{color:#fff;}
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="card-header">
-    <div style="font-size:2rem;">🏦</div>
-    <h5 class="mb-1 fw-bold">KCC Loan Automation</h5>
-    <small class="opacity-75">Powered by Kiran Karchi</small>
+
+<div class="login-card">
+
+  <!-- Header -->
+  <div class="login-header">
+    <div class="logo">🏦</div>
+    <h4>KCC Loan Automation</h4>
+    <div class="sub">Belagavi District &nbsp;|&nbsp; fasalrin.gov.in</div>
   </div>
-  <div class="card-body p-4">
+
+  <!-- Team strip -->
+  <div class="team-strip">
+    <span class="team-chip">
+      <i class="bi bi-shield-fill-check text-success"></i>
+      Kiran Karchi <span class="role ms-1">Owner</span>
+    </span>
+    <span class="team-chip">
+      <i class="bi bi-person-badge text-primary"></i>
+      Mahanthesh Hiremath <span class="role ms-1">Manager</span>
+    </span>
+    <span class="team-chip">
+      <i class="bi bi-person text-secondary"></i>
+      Mahadev Vadeyar <span class="role ms-1">Operator</span>
+    </span>
+    <span class="team-chip">
+      <i class="bi bi-person text-secondary"></i>
+      Avinash Dugnavar <span class="role ms-1">Operator</span>
+    </span>
+  </div>
+
+  <!-- Login form -->
+  <div class="login-body">
     {% if error %}
-    <div class="alert alert-danger py-2 text-center small">❌ {{ error }}</div>
+    <div class="alert alert-danger py-2 text-center small mb-3">
+      <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ error }}
+    </div>
     {% endif %}
+
     <form method="POST" action="/login">
+
+      <!-- Name selector -->
       <div class="mb-3">
-        <label class="form-label fw-semibold">Password</label>
-        <input type="password" name="password" class="form-control form-control-lg"
-               placeholder="Enter password" autofocus required/>
+        <label class="form-label fw-semibold small text-muted">
+          <i class="bi bi-person-circle me-1"></i>Select Your Name
+        </label>
+        <select name="username" class="form-select" required>
+          <option value="" disabled selected>-- Select your name --</option>
+          <option value="Kiran Karchi">👑 Kiran Karchi (Owner)</option>
+          <option value="Mahanthesh Hiremath">🗂️ Mahanthesh Hiremath (Manager)</option>
+          <option value="Mahadev Vadeyar">📋 Mahadev Vadeyar (Operator)</option>
+          <option value="Avinash Dugnavar">📋 Avinash Dugnavar (Operator)</option>
+        </select>
       </div>
-      <button type="submit" class="btn btn-login text-white w-100 py-2 fs-5">
-        🔐 Login
+
+      <!-- Password -->
+      <div class="mb-4">
+        <label class="form-label fw-semibold small text-muted">
+          <i class="bi bi-lock-fill me-1"></i>Password
+        </label>
+        <input type="password" name="password" class="form-control"
+               placeholder="Enter password" required/>
+      </div>
+
+      <button type="submit" class="btn btn-login text-white w-100">
+        <i class="bi bi-box-arrow-in-right me-2"></i>Login to Dashboard
       </button>
     </form>
   </div>
 </div>
-<div class="owner-badge">© 2026 Kiran Karchi &nbsp;|&nbsp; Belagavi KCC Project</div>
+
+<div class="login-footer">
+  <strong>© 2026 Kiran Karchi</strong> &nbsp;|&nbsp; KCC Automation Project<br/>
+  Kagwad Block &nbsp;·&nbsp; Belagavi &nbsp;·&nbsp; Karnataka
+</div>
+
 </body>
 </html>
 """
@@ -222,14 +305,20 @@ body{background:#f0f4f8;font-family:'Segoe UI',sans-serif;}
 
 <nav class="navbar navbar-dark px-4 py-2 mb-3">
   <span class="navbar-brand fw-bold fs-6">
-    <i class="bi bi-bank2 me-2"></i>KCC Loan Automation Dashboard
+    <i class="bi bi-bank2 me-2"></i>KCC Loan Automation
     <span class="badge bg-success ms-2" style="font-size:.65rem;vertical-align:middle;">V4</span>
+    <span class="text-white-50 ms-2" style="font-size:.7rem;font-weight:400;">
+      by Kiran Karchi
+    </span>
   </span>
   <span class="text-white-50 small d-flex align-items-center gap-3">
-    <span><i class="bi bi-person-circle me-1"></i>Kiran Karchi</span>
-    <span>|</span>
+    <span id="loggedUser">
+      <i class="bi bi-person-circle me-1"></i>
+      <span id="loggedName">—</span>
+    </span>
+    <span class="opacity-25">|</span>
     <a id="urlLink" href="#" class="text-white-50 text-decoration-none small"></a>
-    <span>|</span>
+    <span class="opacity-25">|</span>
     <a href="/logout" class="text-white-50 text-decoration-none small">
       <i class="bi bi-box-arrow-right me-1"></i>Logout
     </a>
@@ -425,6 +514,12 @@ const OCOLS = [
 // ── URL display ───────────────────────────────────────────────────────────
 document.getElementById('urlLink').textContent = window.location.href;
 document.getElementById('urlLink').href = window.location.href;
+
+// ── Show logged-in user name in navbar ────────────────────────────────────
+fetch('/whoami').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('loggedName');
+  if(el && d.username) el.textContent = d.username;
+});
 
 // ── Tab switch ────────────────────────────────────────────────────────────
 function switchTab(tab) {
@@ -774,22 +869,26 @@ def login():
         ua  = request.headers.get("User-Agent", "unknown")[:80]
         now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
 
+        username = request.form.get("username", "Unknown")
         if pwd == DASHBOARD_PASSWORD:
             session["authenticated"] = True
+            session["username"]      = username
             # ── Notify owner on successful login ──────────────────────
             msg = (
-                f"✅ <b>KCC Dashboard Login</b>\n"
+                f"✅ <b>KCC Dashboard — Login</b>\n\n"
+                f"👤 Name   : <b>{username}</b>\n"
                 f"🕐 Time   : {now}\n"
                 f"🌐 IP     : {ip}\n"
-                f"📱 Device : {ua}\n"
-                f"👤 Owner  : {OWNER_NAME}"
+                f"📱 Device : {ua}\n\n"
+                f"🔑 Admin  : {OWNER_NAME}"
             )
             threading.Thread(target=send_telegram, args=(msg,), daemon=True).start()
             return redirect("/")
         else:
             # ── Notify owner on failed login attempt ──────────────────
             msg = (
-                f"❌ <b>FAILED Login Attempt</b>\n"
+                f"❌ <b>FAILED Login Attempt</b>\n\n"
+                f"👤 Name   : {username}\n"
                 f"🕐 Time   : {now}\n"
                 f"🌐 IP     : {ip}\n"
                 f"📱 Device : {ua}"
@@ -989,6 +1088,12 @@ def stream():
 @app.route("/ping")
 def ping():
     return jsonify({"ok": True})
+
+
+@app.route("/whoami")
+@login_required
+def whoami():
+    return jsonify({"username": session.get("username", "—")})
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
