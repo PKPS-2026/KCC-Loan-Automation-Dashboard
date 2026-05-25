@@ -3,6 +3,14 @@ name: KCC Data Formatter
 on:
   workflow_dispatch:   # Manual trigger — only YOU can trigger this
 
+# ── Secrets available to ALL steps ────────────────────────────────────────────
+env:
+  DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+  SECRET_KEY:         ${{ secrets.SECRET_KEY }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+  FORMAT_PORT:        "5001"
+
 jobs:
   formatter:
     runs-on: ubuntu-latest
@@ -10,11 +18,11 @@ jobs:
 
     steps:
 
-    # ── 1. Checkout ───────────────────────────────────────────────────────
+    # ── 1. Checkout ───────────────────────────────────────────────────────────
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ── 2. Install Python deps + cloudflared ─────────────────────────────
+    # ── 2. Install Python deps + cloudflared ──────────────────────────────────
     - name: Install dependencies
       run: |
         pip install flask pandas openpyxl
@@ -28,28 +36,49 @@ jobs:
         sudo apt-get install -y cloudflared
         echo "Dependencies installed ✅"
 
-    # ── 3. Start Formatter Dashboard ─────────────────────────────────────
+    # ── 3. Start Formatter Dashboard & wait until it responds ────────────────
     - name: Start Formatter Dashboard
-      env:
-        DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
-        SECRET_KEY:         ${{ secrets.SECRET_KEY }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        FORMAT_PORT:        "5001"
       run: |
-        python src/format_dashboard.py &
-        sleep 4
-        echo "Formatter Dashboard started ✅"
+        python src/format_dashboard.py > /tmp/flask.log 2>&1 &
 
-    # ── 4. Start Cloudflare tunnel & print URL ────────────────────────────
+        # Wait until Flask is actually responding (up to 30s)
+        echo "Waiting for Flask to start..."
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:5001/login > /dev/null 2>&1; then
+            echo "Flask is up on port 5001 ✅"
+            break
+          fi
+          sleep 1
+        done
+
+        # Final check — fail loudly if Flask never came up
+        if ! curl -sf http://localhost:5001/login > /dev/null 2>&1; then
+          echo "❌ Flask failed to start. Last log:"
+          tail -20 /tmp/flask.log
+          exit 1
+        fi
+
+    # ── 4. Start Cloudflare tunnel, wait for URL, notify Telegram ─────────────
     - name: Start Cloudflare tunnel and show URL
       run: |
         cloudflared tunnel --url http://localhost:5001 > /tmp/cf_fmt.log 2>&1 &
 
-        echo "Waiting for tunnel..."
-        sleep 20
+        # Retry up to 60 seconds for the URL to appear
+        echo "Waiting for Cloudflare tunnel URL..."
+        FORMATTER_URL=""
+        for i in $(seq 1 30); do
+          FORMATTER_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/cf_fmt.log | head -1)
+          if [ -n "$FORMATTER_URL" ]; then
+            echo "Tunnel URL found ✅"
+            break
+          fi
+          sleep 2
+        done
 
-        FORMATTER_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf_fmt.log | head -1)
+        if [ -z "$FORMATTER_URL" ]; then
+          echo "⚠️  Could not extract tunnel URL. Raw log:"
+          cat /tmp/cf_fmt.log
+        fi
 
         echo ""
         echo "========================================================"
@@ -66,7 +95,32 @@ jobs:
         echo "  NOTE: URL changes every run — copy it now!"
         echo "========================================================"
 
-    # ── 5. Keep alive ─────────────────────────────────────────────────────
+        # ── Send URL directly to Telegram (opens from any device) ─────────────
+        if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] && [ -n "$FORMATTER_URL" ]; then
+          python3 - <<PYEOF
+import urllib.request, urllib.parse, os
+token = os.environ["TELEGRAM_BOT_TOKEN"]
+chat  = os.environ["TELEGRAM_CHAT_ID"]
+url   = "$FORMATTER_URL"
+msg   = (
+    "📋 KCC Data Formatter is READY!\n\n"
+    f"🔗 URL: {url}\n\n"
+    "🔑 Password: from GitHub Secrets\n"
+    "⏱ Valid for 6 hours\n\n"
+    "👆 Open this link from any device!"
+)
+data = urllib.parse.urlencode({"chat_id": chat, "text": msg}).encode()
+urllib.request.urlopen(
+    f"https://api.telegram.org/bot{token}/sendMessage",
+    data, timeout=10
+)
+print("Telegram notification sent ✅")
+PYEOF
+        else
+          echo "Telegram skipped (secrets not configured)"
+        fi
+
+    # ── 5. Keep alive ──────────────────────────────────────────────────────────
     - name: Keep alive
       run: |
         echo "Formatter is running — stays alive for 6 hours max"
