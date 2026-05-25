@@ -29,7 +29,6 @@ jobs:
       run: |
         pip install flask pandas openpyxl
 
-        # cloudflared via official apt repo
         curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
           | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
         echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
@@ -43,7 +42,6 @@ jobs:
       run: |
         python src/format_dashboard.py > /tmp/flask.log 2>&1 &
 
-        # Wait until Flask is actually responding (up to 30s)
         echo "Waiting for Flask to start..."
         for i in $(seq 1 30); do
           if curl -sf http://localhost:5001/login > /dev/null 2>&1; then
@@ -53,20 +51,18 @@ jobs:
           sleep 1
         done
 
-        # Final check — fail loudly if Flask never came up
         if ! curl -sf http://localhost:5001/login > /dev/null 2>&1; then
-          echo "❌ Flask failed to start. Last log:"
+          echo "Flask failed to start:"
           tail -20 /tmp/flask.log
           exit 1
         fi
 
-    # ── 4. Start Cloudflare tunnel, wait for URL, send email ──────────────────
-    - name: Start Cloudflare tunnel and send URL by email
+    # ── 4. Start Cloudflare tunnel & extract URL ───────────────────────────────
+    - name: Start Cloudflare tunnel
       run: |
         cloudflared tunnel --url http://localhost:5001 > /tmp/cf_fmt.log 2>&1 &
 
-        # Retry up to 60 seconds for the URL to appear
-        echo "Waiting for Cloudflare tunnel URL..."
+        echo "Waiting for tunnel URL..."
         FORMATTER_URL=""
         for i in $(seq 1 30); do
           FORMATTER_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/cf_fmt.log | head -1)
@@ -78,96 +74,27 @@ jobs:
         done
 
         if [ -z "$FORMATTER_URL" ]; then
-          echo "⚠️  Could not extract tunnel URL. Raw log:"
+          echo "Could not extract URL. Raw log:"
           cat /tmp/cf_fmt.log
         fi
+
+        # Save URL for next step
+        echo "FORMATTER_URL=$FORMATTER_URL" >> $GITHUB_ENV
 
         echo ""
         echo "========================================================"
         echo "  KCC DATA FORMATTER IS READY!"
         echo "========================================================"
-        echo ""
-        echo "  FORMATTER  ->  $FORMATTER_URL"
-        echo ""
-        echo "  PASSWORD   ->  set in GitHub Secrets"
-        echo "  NOTE: URL changes every run — copy it now!"
+        echo "  URL      ->  $FORMATTER_URL"
+        echo "  PASSWORD ->  set in GitHub Secrets"
+        echo "  VALID    ->  6 hours"
         echo "========================================================"
 
-        # ── Send URL to both emails via Gmail SMTP ─────────────────────────────
-        if [ -n "$GMAIL_USER" ] && [ -n "$GMAIL_APP_PASSWORD" ] && [ -n "$FORMATTER_URL" ]; then
-          python3 - <<PYEOF
-import smtplib, ssl, os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+    # ── 5. Send URL by email to team ──────────────────────────────────────────
+    - name: Send URL by email
+      run: python src/send_email.py
 
-sender   = os.environ["GMAIL_USER"]
-password = os.environ["GMAIL_APP_PASSWORD"]
-url      = "$FORMATTER_URL"
-
-recipients = ["mahadevasw@gmail.com", "jkkiran06@gmail.com"]
-
-# Plain text version
-text = f"""KCC Data Formatter is READY!
-
-Link : {url}
-Password : from GitHub Secrets
-Valid for : 6 hours
-
-Open this link from any device — phone, tablet or laptop.
-
-— KCC Automation System
-Kagwad Block, Belagavi, Karnataka"""
-
-# HTML version
-html = f"""
-<html><body style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:20px;">
-  <div style="background:linear-gradient(135deg,#0f4c2a,#1a6b3c);border-radius:12px 12px 0 0;padding:20px;text-align:center;">
-    <h2 style="color:#fff;margin:0;">📋 KCC Data Formatter</h2>
-    <p style="color:rgba(255,255,255,.8);margin:6px 0 0;font-size:13px;">Kagwad Block · Belagavi · Karnataka</p>
-  </div>
-  <div style="border:1px solid #e0f0e8;border-top:none;border-radius:0 0 12px 12px;padding:24px;">
-    <p style="font-size:16px;color:#065f46;font-weight:bold;">✅ Formatter is READY!</p>
-    <p style="margin:0 0 6px;color:#555;font-size:13px;">Click the button below to open from any device:</p>
-    <a href="{url}" style="display:inline-block;background:linear-gradient(90deg,#1a6b3c,#2d9e5f);
-       color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;
-       font-weight:bold;font-size:15px;margin:10px 0;">
-      🔗 Open KCC Formatter
-    </a>
-    <table style="margin-top:20px;width:100%;border-collapse:collapse;font-size:13px;">
-      <tr><td style="padding:6px 0;color:#888;width:90px;">🔑 Password</td>
-          <td style="color:#1a1a1a;font-weight:600;">From GitHub Secrets</td></tr>
-      <tr><td style="padding:6px 0;color:#888;">⏱ Valid for</td>
-          <td style="color:#1a1a1a;font-weight:600;">6 hours from now</td></tr>
-      <tr><td style="padding:6px 0;color:#888;">📌 URL</td>
-          <td style="color:#1a6b3c;font-size:11px;word-break:break-all;">{url}</td></tr>
-    </table>
-    <p style="margin-top:20px;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:12px;">
-      © 2026 Kiran Karchi · KCC Automation Project
-    </p>
-  </div>
-</body></html>
-"""
-
-msg = MIMEMultipart("alternative")
-msg["Subject"] = "📋 KCC Data Formatter is Ready — Open Link Inside"
-msg["From"]    = f"KCC Automation <{sender}>"
-msg["To"]      = ", ".join(recipients)
-
-msg.attach(MIMEText(text, "plain"))
-msg.attach(MIMEText(html,  "html"))
-
-ctx = ssl.create_default_context()
-with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as server:
-    server.login(sender, password)
-    server.sendmail(sender, recipients, msg.as_string())
-
-print(f"Email sent to {', '.join(recipients)} ✅")
-PYEOF
-        else
-          echo "Email skipped — GMAIL_USER or GMAIL_APP_PASSWORD secret not set"
-        fi
-
-    # ── 5. Keep alive ──────────────────────────────────────────────────────────
+    # ── 6. Keep alive ──────────────────────────────────────────────────────────
     - name: Keep alive
       run: |
         echo "Formatter is running — stays alive for 6 hours max"
