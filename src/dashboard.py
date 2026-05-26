@@ -222,6 +222,7 @@ OPTIONAL_COLUMNS = [
     "Account Number",
     "Loan Repayment Date",
     "Beneficiary Name",
+    "Village/Region",
 ]
 
 state = {
@@ -468,6 +469,13 @@ body{
                   style="font-size:1.15rem;">
             <i class="bi bi-stop-circle-fill me-2"></i>Stop Automation
           </button>
+          <a id="btnReport"
+             href="/download_report"
+             class="btn text-white fw-bold w-100 py-2 mt-2 d-none"
+             style="font-size:.95rem;background:linear-gradient(90deg,#0f4c2a,#1a6b3c);border-radius:10px;"
+             download>
+            <i class="bi bi-file-earmark-excel-fill me-2"></i>Download Run Report (.xlsx)
+          </a>
           <p id="runHint" class="text-muted small text-center mb-0 mt-2">
             <i class="bi bi-arrow-up-circle me-1"></i>Upload or paste data above to enable
           </p>
@@ -531,7 +539,7 @@ body{
           <table class="table table-hover table-bordered mb-0" id="recTable">
             <thead><tr>
               <th>#</th><th>Beneficiary</th><th>Aadhaar</th>
-              <th>Account</th><th>Amount</th><th>Disbursal</th><th>Status</th>
+              <th>Account</th><th>Amount</th><th>Disbursal</th><th>Region</th><th>Status</th>
             </tr></thead>
             <tbody id="recBody">
               <tr><td colspan="7" class="text-center text-muted py-5">
@@ -854,6 +862,8 @@ function enableRunButton(rows) {
     '<i class="bi bi-check-circle-fill text-success me-1"></i>' +
     (rows || 0) + ' records ready &mdash; click the button above to start';
   document.getElementById('sFail2').textContent = 'Ready';
+  // Show report button once records are loaded (useful to download even before running)
+  document.getElementById('btnReport').classList.remove('d-none');
   setTimeout(() => btn.classList.remove('btn-ready'), 8000);
 }
 
@@ -869,6 +879,7 @@ function renderTable(recs) {
       <td>${r.account || '—'}</td>
       <td>${r.amount ? '₹' + Number(r.amount).toLocaleString('en-IN') : '—'}</td>
       <td>${r.disbursal || '—'}</td>
+      <td class="text-muted small">${r.region || '—'}</td>
       <td id="st${i}"><span class="badge bp">Pending</span></td>
     </tr>`).join('');
 }
@@ -959,6 +970,7 @@ function _doPoll() {
             btn.disabled = false;
             btn.classList.remove('d-none');
             document.getElementById('btnStop').classList.add('d-none');
+            document.getElementById('btnReport').classList.remove('d-none');
             document.getElementById('runHint').innerHTML =
               '<i class="bi bi-check2-all text-success me-1"></i>Finished — click above to run again';
             document.getElementById('sFail2').textContent = 'Done';
@@ -1095,9 +1107,11 @@ def parse_df_to_records(df):
         recs.append({
             "name":     str(row.get("BeneficiaryName", "")).strip() or "—",
             "aadhaar":  mask_aadhaar(aad) if aad else "—",
+            "aadhaar_full": aad,   # kept for report download (unmasked)
             "account":  str(row.get("AccountNumber", "")).replace(".0", "").strip() or "—",
             "amount":   amt,
             "disbursal": str(disb) if disb not in ("", "nan") else "—",
+            "region":   str(row.get("Village/Region", "")).strip() or "",
         })
     return recs
 
@@ -1346,6 +1360,98 @@ def stop():
     state["log_queue"].put(json.dumps({"type": "done"}))
     state["log_buffer"].append(json.dumps({"type": "done"}))
     return jsonify({"ok": True})
+
+
+@app.route("/download_report")
+@login_required
+def download_report():
+    """Generate and download an Excel report of the current run with status per record."""
+    recs = state.get("records", [])
+    sts  = state.get("statuses", {})
+    summ = state.get("summary", {})
+    now  = datetime.datetime.now().strftime("%d-%b-%Y %H:%M")
+
+    status_label = {
+        "success":    "✅ Success",
+        "failed":     "❌ Failed",
+        "skipped":    "⏭️ Skipped",
+        "processing": "⏳ Processing",
+        "pending":    "🕐 Pending",
+    }
+
+    rows = []
+    for i, rec in enumerate(recs):
+        st = sts.get(i, "pending")
+        rows.append({
+            "#":                           i + 1,
+            "Aadhar Number":               rec.get("aadhaar_full") or rec.get("aadhaar", ""),
+            "Beneficiary Name":            rec.get("name", ""),
+            "Loan Disbursal Date":         rec.get("disbursal", ""),
+            "Max Withdrawal Amount (INR)": rec.get("amount", ""),
+            "Village/Region":              rec.get("region", ""),
+            "Status":                      status_label.get(st, st.capitalize()),
+        })
+
+    df = pd.DataFrame(rows)
+
+    # ── Style the Excel ───────────────────────────────────────────────────────
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="KCC Run Report")
+
+        ws = writer.sheets["KCC Run Report"]
+
+        # Header fill
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        hdr_fill = PatternFill("solid", fgColor="0F4C2A")
+        hdr_font = Font(color="FFFFFF", bold=True)
+        thin     = Side(style="thin", color="C8E6C9")
+        border   = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for cell in ws[1]:
+            cell.fill      = hdr_fill
+            cell.font      = hdr_font
+            cell.alignment = Alignment(horizontal="center")
+            cell.border    = border
+
+        # Row colours by status
+        fills = {
+            "✅ Success":    PatternFill("solid", fgColor="D1FAE5"),
+            "❌ Failed":     PatternFill("solid", fgColor="FEE2E2"),
+            "⏭️ Skipped":   PatternFill("solid", fgColor="F3F4F6"),
+            "⏳ Processing": PatternFill("solid", fgColor="FEF9C3"),
+            "🕐 Pending":   PatternFill("solid", fgColor="FFFFFF"),
+        }
+        for row in ws.iter_rows(min_row=2):
+            st_val = row[-1].value or ""
+            fill   = fills.get(st_val)
+            for cell in row:
+                if fill: cell.fill = fill
+                cell.alignment = Alignment(horizontal="left")
+                cell.border    = border
+
+        # Column widths
+        widths = [5, 16, 30, 18, 22, 18, 14]
+        for col, w in zip(ws.iter_cols(min_row=1, max_row=1), widths):
+            ws.column_dimensions[col[0].column_letter].width = w
+
+        # Summary block at bottom
+        blank_row = len(rows) + 3
+        ws.cell(blank_row, 1, "Summary").font     = Font(bold=True)
+        ws.cell(blank_row+1, 1, f"Total    : {summ.get('total',0)}")
+        ws.cell(blank_row+2, 1, f"Success  : {summ.get('success',0)}").font = Font(color="065F46", bold=True)
+        ws.cell(blank_row+3, 1, f"Skipped  : {summ.get('skipped',0)}").font = Font(color="374151")
+        ws.cell(blank_row+4, 1, f"Failed   : {summ.get('failed',0)}").font  = Font(color="991B1B", bold=True)
+        ws.cell(blank_row+5, 1, f"Pending  : {summ.get('pending',0)}")
+        ws.cell(blank_row+7, 1, f"Report generated: {now}")
+
+    out.seek(0)
+    fname = "KCC_Report_" + datetime.datetime.now().strftime("%Y%m%d_%H%M") + ".xlsx"
+    return Response(
+        out.read(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
 
 
 @app.route("/logs")
