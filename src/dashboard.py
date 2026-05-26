@@ -230,6 +230,7 @@ state = {
     "running":   False,
     "process":   None,
     "statuses":  {},
+    "reasons":   {},           # {row_index: "why skipped/failed"}
     "log_queue": queue.Queue(),
     "log_buffer": [],          # replay buffer — last 500 messages for reconnects
     "summary":   {"total": 0, "success": 0, "failed": 0, "skipped": 0, "pending": 0},
@@ -539,7 +540,7 @@ body{
           <table class="table table-hover table-bordered mb-0" id="recTable">
             <thead><tr>
               <th>#</th><th>Beneficiary</th><th>Aadhaar</th>
-              <th>Account</th><th>Amount</th><th>Disbursal</th><th>Region</th><th>Status</th>
+              <th>Account</th><th>Amount</th><th>Disbursal</th><th>Status</th>
             </tr></thead>
             <tbody id="recBody">
               <tr><td colspan="7" class="text-center text-muted py-5">
@@ -879,7 +880,6 @@ function renderTable(recs) {
       <td>${r.account || '—'}</td>
       <td>${r.amount ? '₹' + Number(r.amount).toLocaleString('en-IN') : '—'}</td>
       <td>${r.disbursal || '—'}</td>
-      <td class="text-muted small">${r.region || '—'}</td>
       <td id="st${i}"><span class="badge bp">Pending</span></td>
     </tr>`).join('');
 }
@@ -1261,6 +1261,7 @@ def start():
         return jsonify({"error": f"Script not found: {SCRIPT_PATH}"})
 
     state["statuses"] = {i: "pending" for i in range(len(state["records"]))}
+    state["reasons"]  = {}
     state["running"]  = True
 
     # Flush log queue and clear buffer
@@ -1316,23 +1317,27 @@ def start():
                     _emit(json.dumps({"type": "status", "idx": cur[0], "status": "success"}))
                     _emit(json.dumps({"type": "summary", "summary": build_summary()}))
 
-                # Skipped:  "  SKIPPED record 2: Aadhaar …"
-                ms = re.search(r'SKIPPED record\s+(\d+)', line)
+                # Skipped:  "  SKIPPED record 2: Aadhaar already processed …"
+                ms = re.search(r'SKIPPED record\s+(\d+)[:\-\s]*(.*)', line, re.IGNORECASE)
                 if ms:
                     try:
                         sidx = int(ms.group(1)) - 1
                         state["statuses"][sidx] = "skipped"
+                        reason_text = ms.group(2).strip() if ms.group(2) else "Skipped"
+                        state["reasons"][sidx] = reason_text or "Skipped"
                         _emit(json.dumps({"type": "status", "idx": sidx, "status": "skipped"}))
                         _emit(json.dumps({"type": "summary", "summary": build_summary()}))
                     except:
                         pass
 
-                # Error:    "  ERROR on record 2: …"
-                me = re.search(r'ERROR on record\s+(\d+)', line)
+                # Error:    "  ERROR on record 2: element not found …"
+                me = re.search(r'ERROR on record\s+(\d+)[:\-\s]*(.*)', line, re.IGNORECASE)
                 if me:
                     try:
                         eidx = int(me.group(1)) - 1
                         state["statuses"][eidx] = "failed"
+                        reason_text = me.group(2).strip() if me.group(2) else "Error"
+                        state["reasons"][eidx] = reason_text or "Error"
                         _emit(json.dumps({"type": "status", "idx": eidx, "status": "failed"}))
                         _emit(json.dumps({"type": "summary", "summary": build_summary()}))
                     except:
@@ -1366,10 +1371,11 @@ def stop():
 @login_required
 def download_report():
     """Generate and download an Excel report of the current run with status per record."""
-    recs = state.get("records", [])
-    sts  = state.get("statuses", {})
-    summ = state.get("summary", {})
-    now  = datetime.datetime.now().strftime("%d-%b-%Y %H:%M")
+    recs    = state.get("records", [])
+    sts     = state.get("statuses", {})
+    reasons = state.get("reasons", {})
+    summ    = state.get("summary", {})
+    now     = datetime.datetime.now().strftime("%d-%b-%Y %H:%M")
 
     status_label = {
         "success":    "✅ Success",
@@ -1388,8 +1394,8 @@ def download_report():
             "Beneficiary Name":            rec.get("name", ""),
             "Loan Disbursal Date":         rec.get("disbursal", ""),
             "Max Withdrawal Amount (INR)": rec.get("amount", ""),
-            "Village/Region":              rec.get("region", ""),
             "Status":                      status_label.get(st, st.capitalize()),
+            "Reason":                      reasons.get(i, "") if st in ("skipped", "failed") else "",
         })
 
     df = pd.DataFrame(rows)
@@ -1430,8 +1436,8 @@ def download_report():
                 cell.alignment = Alignment(horizontal="left")
                 cell.border    = border
 
-        # Column widths
-        widths = [5, 16, 30, 18, 22, 18, 14]
+        # Column widths:  #  Aadhar  Name  Date  Amount  Status  Reason
+        widths = [5, 16, 30, 18, 22, 14, 45]
         for col, w in zip(ws.iter_cols(min_row=1, max_row=1), widths):
             ws.column_dimensions[col[0].column_letter].width = w
 
