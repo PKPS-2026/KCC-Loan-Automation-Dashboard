@@ -1531,10 +1531,21 @@ def _get_local_ip():
 
 def _get_cloudflared_exe():
     """
-    Return path to cloudflared.exe — auto-download on first run if missing.
-    If download is blocked by firewall, user can manually place the file in the PRI folder.
+    Return path to cloudflared binary.
+    - Linux: use system-installed cloudflared (from apt / GitHub Actions workflow)
+    - Windows: use cloudflared.exe in BASE_DIR, auto-download if missing
     """
-    import urllib.request, stat
+    import shutil, urllib.request, stat
+
+    # On Linux use the system binary (installed by apt in the workflow)
+    if sys.platform != "win32":
+        system_bin = shutil.which("cloudflared")
+        if system_bin:
+            return system_bin
+        print("  ⚠  cloudflared not found on PATH (Linux). Install with: sudo apt install cloudflared")
+        return None
+
+    # Windows — download .exe if not already present
     exe = os.path.join(BASE_DIR, "cloudflared.exe")
     if os.path.exists(exe):
         return exe
