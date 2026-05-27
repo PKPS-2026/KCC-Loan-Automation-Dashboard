@@ -1243,8 +1243,8 @@ try:
                 print("  OK dismissed")
             except: pass
 
-            # ── Activity tab ───────────────────────────────────────────────
-            print("  Activity tab...")
+            # ── Activity (Multi-Select) tab ────────────────────────────────
+            print("  Activity (Multi-Select) tab...")
             time.sleep(1.5)
             wait_spinner()
 
@@ -1266,7 +1266,6 @@ try:
                 return null;
             """)
             if already_submitted:
-                # Try to close the error popup
                 driver.execute_script("""
                     var closes = document.querySelectorAll(
                         '[class*="close"],[class*="dismiss"],[aria-label="Close"],button');
@@ -1282,218 +1281,208 @@ try:
                     f"{already_submitted[:100]}"
                 )
 
-            # Read KCC drawing limit from page
-            act_loan_val = ""
+            # ── Step 1: Select activity type pill if none is selected ──────
+            # Portal usually pre-selects the correct activity from Aadhaar data.
+            # Only click a pill if nothing is active yet.
+            print("  Checking Activity Type pill selection...")
             try:
-                limit_el = driver.find_element(By.XPATH,
-                    "//*[contains(text(),'KCC drawing limit') or contains(text(),'drawing limit for current')]"
-                    "/following::*[contains(text(),'₹') or contains(@class,'amount') or contains(@class,'limit')][1]")
-                raw = limit_el.text.strip()
-                cleaned = re.sub(r'[₹,\s]', '', raw).split('\n')[0].strip()
-                act_loan_val = str(int(float(cleaned)))
-                print(f"  KCC limit from page = {raw} → {act_loan_val}")
-            except:
-                act_loan_val = loan_val
-                print(f"  Using Excel value: {act_loan_val}")
-
-            # Fill Loan Sanctioned
-            if act_loan_val:
-                filled_act = False
-                for xp in [
-                    "//label[contains(text(),'Loan Sanctioned')]/following::input[1]",
-                    "//*[contains(text(),'Loan Sanctioned')]/following::input[1]",
-                ]:
-                    try:
-                        for act_inp in driver.find_elements(By.XPATH, xp):
-                            if act_inp.is_displayed() and act_inp.is_enabled():
-                                driver.execute_script(
-                                    "arguments[0].scrollIntoView({block:'center'});", act_inp)
-                                act_inp.click(); time.sleep(0.2)
-                                act_inp.send_keys(Keys.CONTROL + "a")
-                                act_inp.send_keys(Keys.DELETE)
-                                act_inp.send_keys(act_loan_val)
-                                driver.execute_script("""
-                                    arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));
-                                    arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-                                    arguments[0].dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
-                                    arguments[0].dispatchEvent(new FocusEvent('blur',  {bubbles:true}));
-                                """, act_inp)
-                                time.sleep(0.4)
-                                if act_loan_val in (act_inp.get_attribute("value") or ""):
-                                    print(f"  Loan Sanctioned filled: {act_loan_val}")
-                                    filled_act = True; break
-                    except: continue
-                    if filled_act: break
-                if not filled_act:
-                    print(f"  WARNING: Loan Sanctioned fill failed — auto-continuing")
-
-            time.sleep(1)
-            wait_spinner()
-
-            # ── Activity multi-select ──────────────────────────────────────
-            print("  Selecting Activity (multi-select)...")
-            try:
-                act_ms_result = driver.execute_script("""
-                    // Find ng-select with multiple attribute
-                    var ngSels = Array.from(document.querySelectorAll('ng-select'));
-                    var target = null;
-
-                    // 1) Prefer one explicitly marked multiple
-                    for (var i = 0; i < ngSels.length; i++) {
-                        var attrs = ngSels[i].attributes;
-                        for (var a = 0; a < attrs.length; a++) {
-                            if (attrs[a].name === 'multiple' ||
-                                    attrs[a].name === 'ng-reflect-multiple' ||
-                                    (attrs[a].name === '[multiple]')) {
-                                target = ngSels[i]; break;
+                pill_status = driver.execute_script("""
+                    // Activity pill buttons are plain <button> elements inside
+                    // a "Choose Activity Type" section.
+                    var allBtns = document.querySelectorAll('button');
+                    var activityPills = [];
+                    var activityLabels = ['Agri Crops','Horti & Veg Crops',
+                                          'Animal Husbandry','Fisheries'];
+                    for (var i = 0; i < allBtns.length; i++) {
+                        var t = (allBtns[i].textContent || '').trim();
+                        for (var k = 0; k < activityLabels.length; k++) {
+                            if (t === activityLabels[k] && allBtns[i].offsetParent) {
+                                activityPills.push(allBtns[i]);
                             }
                         }
-                        if (target) break;
                     }
+                    if (activityPills.length === 0) return 'no_pills';
 
-                    // 2) Fallback: ng-select near an "Activity" label
-                    if (!target) {
-                        var labels = document.querySelectorAll('label');
-                        for (var l = 0; l < labels.length; l++) {
-                            var txt = (labels[l].textContent || '').trim().toLowerCase();
-                            if (txt.indexOf('activity') >= 0 || txt.indexOf('crop') >= 0) {
-                                var sib = labels[l].nextElementSibling;
-                                while (sib) {
-                                    if (sib.tagName && sib.tagName.toLowerCase() === 'ng-select') {
-                                        target = sib; break;
-                                    }
-                                    sib = sib.nextElementSibling;
-                                }
-                            }
-                            if (target) break;
+                    // Check if any pill is already active/selected
+                    for (var j = 0; j < activityPills.length; j++) {
+                        var cls = activityPills[j].className || '';
+                        if (cls.indexOf('active') >= 0 || cls.indexOf('selected') >= 0
+                                || cls.indexOf('btn-primary') >= 0
+                                || cls.indexOf('btn-dark') >= 0
+                                || cls.indexOf('btn-success') >= 0) {
+                            return 'already_active:' + activityPills[j].textContent.trim();
                         }
                     }
 
-                    if (!target) return 'not_found';
-
-                    // Already has a value? Skip.
-                    var existing = target.querySelector('[class*="ng-value-label"],[class*="ng-value"]');
-                    if (existing && existing.offsetParent) return 'already_selected';
-
-                    target.scrollIntoView({block:'center'});
-                    target.click();
-                    return 'opened';
+                    // Nothing active — click first pill (Agri Crops or first found)
+                    activityPills[0].scrollIntoView({block:'center'});
+                    activityPills[0].click();
+                    return 'clicked:' + activityPills[0].textContent.trim();
                 """)
+                print(f"  Activity pill: {pill_status}")
+                if pill_status and pill_status.startswith('clicked'):
+                    time.sleep(1)
+                    wait_spinner()
+            except Exception as _pe:
+                print(f"  Activity pill check failed ({_pe}) — auto-continuing")
 
-                if act_ms_result == 'opened':
-                    time.sleep(0.8)
-                    # Pick "Agri Crops" first, then first available option
-                    opt_selected = driver.execute_script("""
-                        var prefer = ['agri crops', 'agri', 'crop'];
-                        var items = document.querySelectorAll(
-                            'ng-dropdown-panel .ng-option:not(.ng-option-disabled)');
-                        if (items.length === 0) return null;
+            time.sleep(0.5)
 
-                        // Try preferred keywords first
-                        for (var k = 0; k < prefer.length; k++) {
-                            for (var i = 0; i < items.length; i++) {
-                                if ((items[i].textContent || '').trim().toLowerCase()
-                                        .indexOf(prefer[k]) >= 0) {
-                                    items[i].click();
-                                    return items[i].textContent.trim();
-                                }
-                            }
-                        }
-                        // Fallback: click first available
-                        items[0].click();
-                        return items[0].textContent.trim();
-                    """)
+            # ── Step 2: Fill Loan Sanctioned (INR) ─────────────────────────
+            act_loan_val = loan_val
+            print(f"  Filling Loan Sanctioned: {act_loan_val}")
+            filled_act = False
+            for xp in [
+                "//label[contains(text(),'Loan Sanctioned')]/following::input[1]",
+                "//*[contains(text(),'Loan Sanctioned')]/following::input[1]",
+            ]:
+                try:
+                    for act_inp in driver.find_elements(By.XPATH, xp):
+                        if act_inp.is_displayed() and act_inp.is_enabled():
+                            driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center'});", act_inp)
+                            act_inp.click(); time.sleep(0.2)
+                            act_inp.send_keys(Keys.CONTROL + "a")
+                            act_inp.send_keys(Keys.DELETE)
+                            act_inp.send_keys(act_loan_val)
+                            driver.execute_script("""
+                                arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));
+                                arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
+                                arguments[0].dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+                                arguments[0].dispatchEvent(new FocusEvent('blur',  {bubbles:true}));
+                            """, act_inp)
+                            time.sleep(0.4)
+                            if act_loan_val in (act_inp.get_attribute("value") or ""):
+                                print(f"  Loan Sanctioned filled: {act_loan_val}")
+                                filled_act = True; break
+                except: continue
+                if filled_act: break
+            if not filled_act:
+                print("  WARNING: Loan Sanctioned fill failed — auto-continuing")
 
-                    if opt_selected:
-                        print(f"  Activity selected: {opt_selected}")
-                        time.sleep(0.4)
-                        driver.execute_script("document.body.click();")  # close dropdown
-                        time.sleep(0.3)
+            time.sleep(0.5)
+
+            # ── Step 3: Fill Sanction/Rollover Date ────────────────────────
+            # Uses the same date as KCC sanctioned date (DisbursementDate from Excel)
+            if disb_raw is not None and pd.notna(disb_raw):
+                try:
+                    if select_date_in_calendar("Sanction/Rollover", disb_raw, "Sanction/Rollover Date"):
+                        print("  Sanction/Rollover Date filled")
                     else:
-                        print("  Activity multi-select opened but no options found")
-
-                elif act_ms_result == 'already_selected':
-                    print("  Activity already pre-selected")
-                else:
-                    print("  Activity multi-select not found — auto-continuing")
-
-            except Exception as _e:
-                print(f"  Activity multi-select error ({_e}) — auto-continuing")
+                        print("  Sanction/Rollover Date fill failed — auto-continuing")
+                except Exception as _de:
+                    print(f"  Sanction/Rollover Date error ({_de}) — auto-continuing")
+            else:
+                print("  Sanction/Rollover Date: no date in Excel — skipping")
 
             time.sleep(0.8)
             wait_spinner()
 
-            # Activity SAVE & CONTINUE
+            # ── Step 4: Click ADD to confirm any pre-filled table row ──────
+            # The portal pre-fills the land/plantation details from the farmer profile.
+            # ADD must be clicked to submit the row before SAVE & CONTINUE works.
+            print("  Clicking ADD (confirm land detail row)...")
+            try:
+                add_clicked = bool(driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if (t === 'ADD' && btns[i].offsetParent !== null
+                                && !btns[i].disabled) {
+                            btns[i].scrollIntoView({block:'center'});
+                            btns[i].click();
+                            return true;
+                        }
+                    }
+                    return false;
+                """))
+                if add_clicked:
+                    print("  ADD clicked ✅")
+                    time.sleep(1)
+                    wait_spinner()
+                else:
+                    print("  ADD button not found — auto-continuing")
+            except Exception as _ae:
+                print(f"  ADD click error ({_ae}) — auto-continuing")
+
+            time.sleep(0.8)
+            wait_spinner()
+
+            # ── Step 5: SAVE & CONTINUE ────────────────────────────────────
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
-            act_btn = None
-            for xp in [
-                "//button[normalize-space(.)='SAVE & CONTINUE']",
-                "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
-            ]:
-                try:
-                    for el in driver.find_elements(By.XPATH, xp):
-                        if el.is_displayed() and el.is_enabled(): act_btn = el; break
-                except: pass
-                if act_btn: break
 
-            if act_btn:
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", act_btn)
-                time.sleep(0.4)
-
-                # Try 0: JS direct click (most reliable for Angular)
-                try:
-                    act_saved = bool(driver.execute_script("""
-                        var btns = document.querySelectorAll('button');
-                        for (var i = 0; i < btns.length; i++) {
-                            var t = (btns[i].textContent || '').trim().toUpperCase();
-                            if ((t === 'SAVE & CONTINUE' || (t.includes('SAVE') && t.includes('CONTINUE')))
-                                    && btns[i].offsetParent !== null && !btns[i].disabled) {
-                                btns[i].click(); return true;
-                            }
+            # Try 0: JS force-click — bypasses Angular disabled state,
+            # most reliable for Angular reactive forms
+            try:
+                act_saved = bool(driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if ((t === 'SAVE & CONTINUE' ||
+                                (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                && btns[i].offsetParent !== null) {
+                            btns[i].scrollIntoView({block:'center'});
+                            btns[i].click();
+                            return true;
                         }
-                        return false;
-                    """))
-                    if act_saved: print("  Activity SAVE — JS click")
-                except: pass
+                    }
+                    return false;
+                """))
+                if act_saved: print("  Activity SAVE — JS click ✅")
+            except: pass
 
-                # Try 1: RETURN key
-                if not act_saved:
+            # Try 1: Selenium click via XPath
+            if not act_saved:
+                act_btn = None
+                for xp in [
+                    "//button[normalize-space(.)='SAVE & CONTINUE']",
+                    "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
+                ]:
                     try:
-                        driver.execute_script("arguments[0].focus();", act_btn)
-                        time.sleep(0.3)
-                        act_btn.send_keys(Keys.RETURN)
-                        time.sleep(1); act_saved = True
-                        print("  Activity SAVE — RETURN key")
+                        for el in driver.find_elements(By.XPATH, xp):
+                            if el.is_displayed(): act_btn = el; break
                     except: pass
+                    if act_btn: break
 
-                # Try 2: ActionChains
-                if not act_saved:
+                if act_btn:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", act_btn)
+                    time.sleep(0.4)
                     try:
                         ActionChains(driver).move_to_element(act_btn).pause(0.3).click().perform()
                         time.sleep(1); act_saved = True
-                        print("  Activity SAVE — ActionChains")
+                        print("  Activity SAVE — ActionChains ✅")
                     except: pass
 
-                # Try 3: MouseEvent
-                if not act_saved:
-                    try:
-                        driver.execute_script("""
-                            var el=arguments[0]; el.focus();
-                            ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(function(ev){
-                                el.dispatchEvent(new MouseEvent(ev,{view:window,bubbles:true,cancelable:true}));
-                            });
-                        """, act_btn)
-                        time.sleep(1); act_saved = True
-                        print("  Activity SAVE — MouseEvent")
-                    except: pass
-            else:
-                print("  SAVE & CONTINUE button not found or disabled — auto-continuing")
+            # Try 2: RETURN key
+            if not act_saved and act_btn:
+                try:
+                    driver.execute_script("arguments[0].focus();", act_btn)
+                    time.sleep(0.3)
+                    act_btn.send_keys(Keys.RETURN)
+                    time.sleep(1); act_saved = True
+                    print("  Activity SAVE — RETURN key ✅")
+                except: pass
+
+            # Try 3: MouseEvent dispatch
+            if not act_saved and act_btn:
+                try:
+                    driver.execute_script("""
+                        var el=arguments[0]; el.focus();
+                        ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(function(ev){
+                            el.dispatchEvent(
+                                new MouseEvent(ev,{view:window,bubbles:true,cancelable:true}));
+                        });
+                    """, act_btn)
+                    time.sleep(1); act_saved = True
+                    print("  Activity SAVE — MouseEvent ✅")
+                except: pass
 
             if not act_saved:
-                print("  WARNING: SAVE & CONTINUE auto-click failed — auto-continuing")
+                print("  WARNING: Activity SAVE & CONTINUE failed — auto-continuing")
 
-            time.sleep(1)
+            time.sleep(1.5)
             wait_spinner()
 
             # OK popup after Activity save
