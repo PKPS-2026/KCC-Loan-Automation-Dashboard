@@ -1330,6 +1330,99 @@ try:
             time.sleep(1)
             wait_spinner()
 
+            # ── Activity multi-select ──────────────────────────────────────
+            print("  Selecting Activity (multi-select)...")
+            try:
+                act_ms_result = driver.execute_script("""
+                    // Find ng-select with multiple attribute
+                    var ngSels = Array.from(document.querySelectorAll('ng-select'));
+                    var target = null;
+
+                    // 1) Prefer one explicitly marked multiple
+                    for (var i = 0; i < ngSels.length; i++) {
+                        var attrs = ngSels[i].attributes;
+                        for (var a = 0; a < attrs.length; a++) {
+                            if (attrs[a].name === 'multiple' ||
+                                    attrs[a].name === 'ng-reflect-multiple' ||
+                                    (attrs[a].name === '[multiple]')) {
+                                target = ngSels[i]; break;
+                            }
+                        }
+                        if (target) break;
+                    }
+
+                    // 2) Fallback: ng-select near an "Activity" label
+                    if (!target) {
+                        var labels = document.querySelectorAll('label');
+                        for (var l = 0; l < labels.length; l++) {
+                            var txt = (labels[l].textContent || '').trim().toLowerCase();
+                            if (txt.indexOf('activity') >= 0 || txt.indexOf('crop') >= 0) {
+                                var sib = labels[l].nextElementSibling;
+                                while (sib) {
+                                    if (sib.tagName && sib.tagName.toLowerCase() === 'ng-select') {
+                                        target = sib; break;
+                                    }
+                                    sib = sib.nextElementSibling;
+                                }
+                            }
+                            if (target) break;
+                        }
+                    }
+
+                    if (!target) return 'not_found';
+
+                    // Already has a value? Skip.
+                    var existing = target.querySelector('[class*="ng-value-label"],[class*="ng-value"]');
+                    if (existing && existing.offsetParent) return 'already_selected';
+
+                    target.scrollIntoView({block:'center'});
+                    target.click();
+                    return 'opened';
+                """)
+
+                if act_ms_result == 'opened':
+                    time.sleep(0.8)
+                    # Pick "Agri Crops" first, then first available option
+                    opt_selected = driver.execute_script("""
+                        var prefer = ['agri crops', 'agri', 'crop'];
+                        var items = document.querySelectorAll(
+                            'ng-dropdown-panel .ng-option:not(.ng-option-disabled)');
+                        if (items.length === 0) return null;
+
+                        // Try preferred keywords first
+                        for (var k = 0; k < prefer.length; k++) {
+                            for (var i = 0; i < items.length; i++) {
+                                if ((items[i].textContent || '').trim().toLowerCase()
+                                        .indexOf(prefer[k]) >= 0) {
+                                    items[i].click();
+                                    return items[i].textContent.trim();
+                                }
+                            }
+                        }
+                        // Fallback: click first available
+                        items[0].click();
+                        return items[0].textContent.trim();
+                    """)
+
+                    if opt_selected:
+                        print(f"  Activity selected: {opt_selected}")
+                        time.sleep(0.4)
+                        driver.execute_script("document.body.click();")  # close dropdown
+                        time.sleep(0.3)
+                    else:
+                        print("  Activity multi-select opened but no options found")
+
+                elif act_ms_result == 'already_selected':
+                    print("  Activity already pre-selected")
+                else:
+                    print("  Activity multi-select not found — auto-continuing")
+
+            except Exception as _e:
+                print(f"  Activity multi-select error ({_e}) — auto-continuing")
+
+            time.sleep(0.8)
+            wait_spinner()
+
             # Activity SAVE & CONTINUE
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
@@ -1340,7 +1433,7 @@ try:
             ]:
                 try:
                     for el in driver.find_elements(By.XPATH, xp):
-                        if el.is_displayed(): act_btn = el; break
+                        if el.is_displayed() and el.is_enabled(): act_btn = el; break
                 except: pass
                 if act_btn: break
 
@@ -1348,14 +1441,31 @@ try:
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", act_btn)
                 time.sleep(0.4)
 
-                # Try 1: RETURN key
+                # Try 0: JS direct click (most reliable for Angular)
                 try:
-                    driver.execute_script("arguments[0].focus();", act_btn)
-                    time.sleep(0.3)
-                    act_btn.send_keys(Keys.RETURN)
-                    time.sleep(1); act_saved = True
-                    print("  Activity SAVE — RETURN key")
+                    act_saved = bool(driver.execute_script("""
+                        var btns = document.querySelectorAll('button');
+                        for (var i = 0; i < btns.length; i++) {
+                            var t = (btns[i].textContent || '').trim().toUpperCase();
+                            if ((t === 'SAVE & CONTINUE' || (t.includes('SAVE') && t.includes('CONTINUE')))
+                                    && btns[i].offsetParent !== null && !btns[i].disabled) {
+                                btns[i].click(); return true;
+                            }
+                        }
+                        return false;
+                    """))
+                    if act_saved: print("  Activity SAVE — JS click")
                 except: pass
+
+                # Try 1: RETURN key
+                if not act_saved:
+                    try:
+                        driver.execute_script("arguments[0].focus();", act_btn)
+                        time.sleep(0.3)
+                        act_btn.send_keys(Keys.RETURN)
+                        time.sleep(1); act_saved = True
+                        print("  Activity SAVE — RETURN key")
+                    except: pass
 
                 # Try 2: ActionChains
                 if not act_saved:
@@ -1378,7 +1488,7 @@ try:
                         print("  Activity SAVE — MouseEvent")
                     except: pass
             else:
-                print("  SAVE & CONTINUE button not found — auto-continuing")
+                print("  SAVE & CONTINUE button not found or disabled — auto-continuing")
 
             if not act_saved:
                 print("  WARNING: SAVE & CONTINUE auto-click failed — auto-continuing")
