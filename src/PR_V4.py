@@ -1398,8 +1398,26 @@ try:
                 """))
                 if add_clicked:
                     print("  ADD clicked ✅")
-                    time.sleep(1)
+                    time.sleep(1.5)
                     wait_spinner()
+                    # Verify ADD worked: SAVE & CONTINUE should now be enabled
+                    add_confirmed = bool(driver.execute_script("""
+                        var btns = document.querySelectorAll('button');
+                        for (var i = 0; i < btns.length; i++) {
+                            var t = (btns[i].textContent || '').trim().toUpperCase();
+                            if ((t === 'SAVE & CONTINUE' ||
+                                    (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                    && btns[i].offsetParent !== null
+                                    && !btns[i].disabled) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    """))
+                    if add_confirmed:
+                        print("  ADD confirmed — SAVE & CONTINUE is enabled ✅")
+                    else:
+                        print("  WARNING: After ADD, SAVE & CONTINUE still disabled — row may not have been saved")
                 else:
                     print("  ADD button not found — auto-continuing")
             except Exception as _ae:
@@ -1412,48 +1430,47 @@ try:
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
 
-            # Try 0: JS force-click — bypasses Angular disabled state,
-            # most reliable for Angular reactive forms
-            try:
-                act_saved = bool(driver.execute_script("""
-                    var btns = document.querySelectorAll('button');
-                    for (var i = 0; i < btns.length; i++) {
-                        var t = (btns[i].textContent || '').trim().toUpperCase();
-                        if ((t === 'SAVE & CONTINUE' ||
-                                (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
-                                && btns[i].offsetParent !== null) {
-                            btns[i].scrollIntoView({block:'center'});
-                            btns[i].click();
-                            return true;
-                        }
-                    }
-                    return false;
-                """))
-                if act_saved: print("  Activity SAVE — JS click ✅")
-            except: pass
+            # Try 0: ActionChains (most reliable for Angular — triggers real mouse events)
+            act_btn = None
+            for xp in [
+                "//button[normalize-space(.)='SAVE & CONTINUE']",
+                "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
+            ]:
+                try:
+                    for el in driver.find_elements(By.XPATH, xp):
+                        if el.is_displayed(): act_btn = el; break
+                except: pass
+                if act_btn: break
 
-            # Try 1: Selenium click via XPath
+            if act_btn:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", act_btn)
+                time.sleep(0.4)
+                try:
+                    ActionChains(driver).move_to_element(act_btn).pause(0.3).click().perform()
+                    time.sleep(1); act_saved = True
+                    print("  Activity SAVE — ActionChains ✅")
+                except: pass
+
+            # Try 1: JS click (fallback if ActionChains failed)
             if not act_saved:
-                act_btn = None
-                for xp in [
-                    "//button[normalize-space(.)='SAVE & CONTINUE']",
-                    "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
-                ]:
-                    try:
-                        for el in driver.find_elements(By.XPATH, xp):
-                            if el.is_displayed(): act_btn = el; break
-                    except: pass
-                    if act_btn: break
-
-                if act_btn:
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", act_btn)
-                    time.sleep(0.4)
-                    try:
-                        ActionChains(driver).move_to_element(act_btn).pause(0.3).click().perform()
-                        time.sleep(1); act_saved = True
-                        print("  Activity SAVE — ActionChains ✅")
-                    except: pass
+                try:
+                    act_saved = bool(driver.execute_script("""
+                        var btns = document.querySelectorAll('button');
+                        for (var i = 0; i < btns.length; i++) {
+                            var t = (btns[i].textContent || '').trim().toUpperCase();
+                            if ((t === 'SAVE & CONTINUE' ||
+                                    (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                    && btns[i].offsetParent !== null) {
+                                btns[i].scrollIntoView({block:'center'});
+                                btns[i].click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    """))
+                    if act_saved: print("  Activity SAVE — JS click ✅")
+                except: pass
 
             # Try 2: RETURN key
             if not act_saved and act_btn:
@@ -1480,10 +1497,35 @@ try:
                 except: pass
 
             if not act_saved:
-                print("  WARNING: Activity SAVE & CONTINUE failed — auto-continuing")
+                print("  WARNING: Activity SAVE & CONTINUE — all strategies failed")
 
             time.sleep(1.5)
             wait_spinner()
+
+            # ── Verify navigation away from Activity tab ───────────────────
+            # PREVIEW button only appears on Term Loan Details tab.
+            # If it's visible, SAVE & CONTINUE worked. If not, we're still on Activity.
+            nav_verified = bool(driver.execute_script("""
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = (btns[i].textContent || '').trim().toUpperCase();
+                    if (t === 'PREVIEW' && btns[i].offsetParent !== null) return true;
+                }
+                // Also check Term Loan tab active state
+                var tabs = document.querySelectorAll('li a, .nav-link, [role="tab"]');
+                for (var i = 0; i < tabs.length; i++) {
+                    var t = (tabs[i].textContent || '').trim();
+                    if (t.indexOf('Term Loan') >= 0) {
+                        var cls = tabs[i].className || '';
+                        if (cls.indexOf('active') >= 0) return true;
+                    }
+                }
+                return false;
+            """))
+            if nav_verified:
+                print("  Activity tab saved — now on Term Loan Details ✅")
+            else:
+                print("  WARNING: Still on Activity tab — SAVE & CONTINUE did not navigate")
 
             # OK popup after Activity save
             try:
