@@ -200,8 +200,8 @@ def click_button_by_text(btn_text, timeout=10):
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
             time.sleep(0.3)
-            ActionChains(driver).move_to_element(btn).click().perform()
-            print(f"  '{btn_text}' clicked via ActionChains")
+            driver.execute_script("arguments[0].click();", btn)
+            print(f"  '{btn_text}' clicked via JS click")
             time.sleep(1)
             wait_spinner()
             return True
@@ -396,50 +396,51 @@ def _select_date_impl(label_frag, date_val, desc):  # noqa — complete rewrite
         return inp;
     """, date_inp)
 
+    # DO NOT use ActionChains for any calendar click — in VNC/noVNC the pixel
+    # coordinates are wrong and ActionChains lands on the profile icon instead.
+    # Use JS element.click() and MouseEvent dispatch (coordinate-free) only.
+
     if icon_el:
         tag = icon_el.tag_name; cls = (icon_el.get_attribute('class') or '')[:35]
         print(f"  Icon element: {tag}.{cls}")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", icon_el)
-        time.sleep(0.25)
-        # ActionChains click (real browser event)
-        try:
-            ActionChains(driver).move_to_element(icon_el).click().perform()
-            opened = _wait_dp(2.5)
-            if opened: print(f"  Calendar opened ✅ (ActionChains)")
-        except Exception as _e:
-            print(f"  ActionChains err: {_e}")
-        # JS click fallback
+        # JS click (coordinate-free — correct in VNC)
+        driver.execute_script("arguments[0].click();", icon_el)
+        opened = _wait_dp(2.5)
+        if opened:
+            print(f"  Calendar opened ✅ (JS click on icon)")
+        # MouseEvent dispatch fallback (still coordinate-free — dispatched on element)
         if not opened:
-            driver.execute_script("arguments[0].click();", icon_el)
+            driver.execute_script("""
+                var el = arguments[0]; el.focus();
+                ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(function(ev){
+                    el.dispatchEvent(new MouseEvent(ev, {bubbles:true, cancelable:true}));
+                });
+            """, icon_el)
             opened = _wait_dp(2.0)
-            if opened: print(f"  Calendar opened ✅ (JS click)")
+            if opened: print(f"  Calendar opened ✅ (MouseEvent on icon)")
 
-    # Fallback: MouseEvent on rmdp-container
+    # Fallback: JS click directly on the rmdp-container (no coordinates)
     if not opened:
         r2 = driver.execute_script("""
             var inp = arguments[0];
             var rmdp = inp.closest('.rmdp-container') || inp.parentElement;
-            var cx = rmdp.getBoundingClientRect().right - 20;
-            var cy = rmdp.getBoundingClientRect().top + rmdp.offsetHeight/2;
-            var tgt = document.elementFromPoint(cx, cy) || rmdp;
-            if (tgt.tagName.toLowerCase()==='svg') tgt = tgt.parentElement || tgt;
-            ['mouseover','mousedown','mouseup','click'].forEach(function(ev){
-                tgt.dispatchEvent(new MouseEvent(ev,{bubbles:true,cancelable:true,
-                    view:window,clientX:cx,clientY:cy}));
-            });
-            return 'fired:'+(tgt.getAttribute('class')||tgt.tagName).slice(0,25);
+            var svg = rmdp ? rmdp.querySelector('svg') : null;
+            var tgt = svg ? (svg.parentElement || svg) : rmdp;
+            if (tgt) {
+                tgt.click();
+                return 'clicked:'+(tgt.getAttribute('class')||tgt.tagName).slice(0,25);
+            }
+            return 'not-found';
         """, date_inp)
-        print(f"  MouseEvent: {r2}")
+        print(f"  rmdp-container click: {r2}")
         opened = _wait_dp(2.0)
-        if opened: print(f"  Calendar opened ✅ (MouseEvent)")
+        if opened: print(f"  Calendar opened ✅ (rmdp-container JS click)")
 
-    # Fallback: click input directly
+    # Last fallback: JS click on the input itself
     if not opened:
-        try:
-            ActionChains(driver).move_to_element(date_inp).click().perform()
-            opened = _wait_dp(1.5)
-            if opened: print(f"  Calendar opened ✅ (input click)")
-        except: pass
+        driver.execute_script("arguments[0].click(); arguments[0].focus();", date_inp)
+        opened = _wait_dp(1.5)
+        if opened: print(f"  Calendar opened ✅ (input JS click)")
 
     if not opened:
         # Dump all calendar-related elements for diagnosis
@@ -617,18 +618,18 @@ def _select_date_impl(label_frag, date_val, desc):  # noqa — complete rewrite
     print(f"  Day click: {day_r}")
     day_clicked = day_r.startswith('ok:')
 
-    # ActionChains fallback on RMDP day spans
+    # JS click fallback on RMDP day spans (no ActionChains — VNC coordinate-safe)
     if not day_clicked:
-        print(f"  Trying ActionChains on rmdp-day elements...")
+        print(f"  Trying JS click on rmdp-day elements...")
         try:
             for el in driver.find_elements(By.CSS_SELECTOR,
                     ".rmdp-day:not(.rmdp-deactive):not(.rmdp-disabled) span"):
                 if el.is_displayed() and el.text.strip() == str(d):
-                    ActionChains(driver).move_to_element(el).click().perform()
-                    print(f"  Day {d}: ✅ AC rmdp-day")
+                    driver.execute_script("arguments[0].click();", el)
+                    print(f"  Day {d}: ✅ JS rmdp-day")
                     day_clicked = True; break
         except Exception as _e:
-            print(f"  AC rmdp err: {_e}")
+            print(f"  JS rmdp err: {_e}")
 
     if not day_clicked:
         print(f"  WARNING: day {d} not clicked — auto-continuing")
@@ -1386,8 +1387,8 @@ try:
             add_confirmed = False
 
             def _do_add_click():
-                """Try ActionChains → MouseEvent → bare JS click. Returns True if any fired."""
-                # Strategy A: ActionChains (real browser events — Angular's preferred path)
+                """JS click → MouseEvent → bare JS click on ADD. Coordinate-free for VNC."""
+                # Strategy A: JS click on element (coordinate-free)
                 try:
                     add_el = None
                     for xp_a in [
@@ -1400,14 +1401,11 @@ try:
                                 add_el = _el; break
                         if add_el: break
                     if add_el:
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});", add_el)
-                        time.sleep(0.5)
-                        ActionChains(driver).move_to_element(add_el).pause(0.4).click().perform()
-                        print("  ADD fired ✅ (ActionChains)")
+                        driver.execute_script("arguments[0].click();", add_el)
+                        print("  ADD fired ✅ (JS click)")
                         return True
                 except Exception as _ae:
-                    print(f"  ADD ActionChains err: {_ae}")
+                    print(f"  ADD JS click err: {_ae}")
 
                 # Strategy B: Full MouseEvent dispatch (Angular zone-safe)
                 res = driver.execute_script("""
@@ -1656,16 +1654,13 @@ try:
                 if preview_clicked:
                     print("  PREVIEW clicked ✅ (JS)")
                     break
-                # ActionChains fallback
+                # JS element click fallback
                 try:
                     xp = "//button[normalize-space(.)='PREVIEW']"
                     btn = WebDriverWait(driver, 5).until(
                         EC.element_to_be_clickable((By.XPATH, xp)))
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", btn)
-                    time.sleep(0.3)
-                    ActionChains(driver).move_to_element(btn).click().perform()
-                    print("  PREVIEW clicked ✅ (ActionChains)")
+                    driver.execute_script("arguments[0].click();", btn)
+                    print("  PREVIEW clicked ✅ (JS element click)")
                     preview_clicked = True
                     break
                 except: pass
@@ -1705,16 +1700,13 @@ try:
                 if submit_clicked:
                     print("  SUBMIT clicked ✅ (JS)")
                     break
-                # ActionChains fallback
+                # JS element click fallback
                 try:
                     xp = "//button[normalize-space(.)='SUBMIT']"
                     btn = WebDriverWait(driver, 5).until(
                         EC.element_to_be_clickable((By.XPATH, xp)))
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", btn)
-                    time.sleep(0.3)
-                    ActionChains(driver).move_to_element(btn).click().perform()
-                    print("  SUBMIT clicked ✅ (ActionChains)")
+                    driver.execute_script("arguments[0].click();", btn)
+                    print("  SUBMIT clicked ✅ (JS element click)")
                     submit_clicked = True
                     break
                 except: pass
@@ -1750,11 +1742,8 @@ try:
                     xp = "//button[normalize-space()='CONFIRM']"
                     btn = WebDriverWait(driver, 5).until(
                         EC.element_to_be_clickable((By.XPATH, xp)))
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", btn)
-                    time.sleep(0.3)
-                    ActionChains(driver).move_to_element(btn).click().perform()
-                    print("  CONFIRM clicked ✅ (ActionChains)")
+                    driver.execute_script("arguments[0].click();", btn)
+                    print("  CONFIRM clicked ✅ (JS element click)")
                     confirm_clicked = True
                     break
                 except: pass
