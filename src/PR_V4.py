@@ -385,15 +385,8 @@ def _select_date_impl(label_frag, date_val, desc):  # noqa — complete rewrite
             if (svg) return svg.parentElement || svg;
             el = el.parentElement;
         }
-        // Last resort: elementFromPoint to the right/inside-right of input
-        var r = inp.getBoundingClientRect(), mid = r.top + r.height/2;
-        for (var ox of [-20, -30, -10, 5, -40]) {
-            var found = document.elementFromPoint(r.right + ox, mid);
-            if (found && found !== inp && found.tagName !== 'BODY')
-                return found.tagName.toLowerCase()==='svg' ?
-                       (found.parentElement || found) : found;
-        }
-        return inp;
+        // No coordinate-based fallback — return null so caller uses input.click()
+        return null;
     """, date_inp)
 
     # DO NOT use ActionChains for any calendar click — in VNC/noVNC the pixel
@@ -1340,18 +1333,15 @@ try:
                 try:
                     for act_inp in driver.find_elements(By.XPATH, xp):
                         if act_inp.is_displayed() and act_inp.is_enabled():
-                            driver.execute_script(
-                                "arguments[0].scrollIntoView({block:'center'});", act_inp)
-                            act_inp.click(); time.sleep(0.2)
-                            act_inp.send_keys(Keys.CONTROL + "a")
-                            act_inp.send_keys(Keys.DELETE)
-                            act_inp.send_keys(act_loan_val)
+                            # Pure JS fill — no Selenium coordinate click
                             driver.execute_script("""
-                                arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));
-                                arguments[0].dispatchEvent(new Event('change', {bubbles:true}));
-                                arguments[0].dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
-                                arguments[0].dispatchEvent(new FocusEvent('blur',  {bubbles:true}));
-                            """, act_inp)
+                                var el = arguments[0], v = arguments[1];
+                                el.focus();
+                                el.value = v;
+                                ['input','change','keyup','blur'].forEach(function(ev){
+                                    el.dispatchEvent(new Event(ev, {bubbles:true}));
+                                });
+                            """, act_inp, act_loan_val)
                             time.sleep(0.4)
                             if act_loan_val in (act_inp.get_attribute("value") or ""):
                                 print(f"  Loan Sanctioned filled: {act_loan_val}")
@@ -1515,9 +1505,16 @@ try:
             wait_spinner()
 
             # ── Step 5: SAVE & CONTINUE ────────────────────────────────────
-            # DO NOT use ActionChains here — in VNC/noVNC the coordinate transform
-            # is wrong and the mouse lands on the profile icon (top-right) instead of
-            # the button (bottom-right). Use JS-only clicks which are coordinate-free.
+            # Press Escape + body click to close any open dropdown
+            # (profile menu, ng-select, etc.) before clicking SAVE & CONTINUE.
+            try:
+                driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                time.sleep(0.3)
+            except: pass
+            try:
+                driver.execute_script("document.body.dispatchEvent(new MouseEvent('click',{bubbles:true}));")
+                time.sleep(0.2)
+            except: pass
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
 
