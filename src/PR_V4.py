@@ -1512,6 +1512,49 @@ try:
             time.sleep(0.5)
             wait_spinner()
 
+            # ── Remove empty land-detail rows ──────────────────────────────
+            # The portal always shows the farmer's pre-filled row PLUS one empty
+            # row below it.  The empty row has required-field validation errors
+            # that keep SAVE & CONTINUE disabled.  Click the red ⭕ delete button
+            # on every row that has 2+ empty input fields to clear them.
+            removed_rows = driver.execute_script("""
+                var count = 0;
+                // Danger/delete/remove buttons are the red circular ones
+                var delBtns = document.querySelectorAll(
+                    'button[class*="danger"],button[class*="delete"],'
+                  + 'button[class*="remove"],button[class*="btn-round"],'
+                  + 'button[class*="mat-warn"]'
+                );
+                for (var i = 0; i < delBtns.length; i++) {
+                    var btn = delBtns[i];
+                    if (!btn.offsetParent) continue;   // hidden
+                    // Walk up to find the row container
+                    var container = btn.parentElement;
+                    for (var up = 0; up < 6; up++) {
+                        if (!container) break;
+                        var inputs = container.querySelectorAll('input');
+                        var emptyCount = 0;
+                        for (var j = 0; j < inputs.length; j++) {
+                            if ((inputs[j].value || '').trim() === '') emptyCount++;
+                        }
+                        if (emptyCount >= 2) {
+                            // Row has 2+ empty required inputs → delete it
+                            btn.click();
+                            count++;
+                            break;
+                        }
+                        container = container.parentElement;
+                    }
+                }
+                return count;
+            """)
+            if removed_rows:
+                print(f"  Removed {removed_rows} empty land row(s) ✅")
+                time.sleep(0.5)
+                wait_spinner()
+            else:
+                print("  No empty land rows found — proceeding")
+
             # ── Step 5: SAVE & CONTINUE ────────────────────────────────────
             # Press Escape + body click to close any open dropdown
             # (profile menu, ng-select, etc.) before clicking SAVE & CONTINUE.
