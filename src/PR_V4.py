@@ -1379,58 +1379,148 @@ try:
             wait_spinner()
 
             # ── Step 4: Click ADD to confirm any pre-filled table row ──────
-            # The portal pre-fills the land/plantation details from the farmer profile.
-            # ADD must be clicked to submit the row before SAVE & CONTINUE works.
+            # ADD must be clicked to submit the row before SAVE & CONTINUE activates.
+            # Angular requires real mouse events — ActionChains first, JS clicks as fallback.
             print("  Clicking ADD (confirm land detail row)...")
-            try:
-                add_clicked = bool(driver.execute_script("""
+            add_clicked = False
+            add_confirmed = False
+
+            def _do_add_click():
+                """Try ActionChains → MouseEvent → bare JS click. Returns True if any fired."""
+                # Strategy A: ActionChains (real browser events — Angular's preferred path)
+                try:
+                    add_el = None
+                    for xp_a in [
+                        "//button[normalize-space(.)='ADD']",
+                        "//button[normalize-space(.)='Add']",
+                        "//button[contains(@class,'btn') and normalize-space(.)='ADD']",
+                    ]:
+                        for _el in driver.find_elements(By.XPATH, xp_a):
+                            if _el.is_displayed():
+                                add_el = _el; break
+                        if add_el: break
+                    if add_el:
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});", add_el)
+                        time.sleep(0.5)
+                        ActionChains(driver).move_to_element(add_el).pause(0.4).click().perform()
+                        print("  ADD fired ✅ (ActionChains)")
+                        return True
+                except Exception as _ae:
+                    print(f"  ADD ActionChains err: {_ae}")
+
+                # Strategy B: Full MouseEvent dispatch (Angular zone-safe)
+                res = driver.execute_script("""
                     var btns = document.querySelectorAll('button');
                     for (var i = 0; i < btns.length; i++) {
                         var t = (btns[i].textContent || '').trim().toUpperCase();
-                        if (t === 'ADD' && btns[i].offsetParent !== null
-                                && !btns[i].disabled) {
+                        if (t === 'ADD' && btns[i].offsetParent !== null && !btns[i].disabled) {
+                            btns[i].scrollIntoView({block:'center'});
+                            var el = btns[i];
+                            ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(
+                                function(ev){
+                                    el.dispatchEvent(new MouseEvent(ev,
+                                        {view:window,bubbles:true,cancelable:true}));
+                                });
+                            return 'ok';
+                        }
+                    }
+                    return 'not-found';
+                """)
+                if res == 'ok':
+                    print("  ADD fired ✅ (MouseEvent)")
+                    return True
+
+                # Strategy C: bare JS click (last resort)
+                clicked = driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if (t === 'ADD' && btns[i].offsetParent !== null && !btns[i].disabled) {
                             btns[i].scrollIntoView({block:'center'});
                             btns[i].click();
                             return true;
                         }
                     }
                     return false;
-                """))
-                if add_clicked:
-                    print("  ADD clicked ✅")
-                    time.sleep(1.5)
-                    wait_spinner()
-                    # Verify ADD worked: SAVE & CONTINUE should now be enabled
-                    add_confirmed = bool(driver.execute_script("""
-                        var btns = document.querySelectorAll('button');
-                        for (var i = 0; i < btns.length; i++) {
-                            var t = (btns[i].textContent || '').trim().toUpperCase();
-                            if ((t === 'SAVE & CONTINUE' ||
-                                    (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
-                                    && btns[i].offsetParent !== null
-                                    && !btns[i].disabled) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    """))
-                    if add_confirmed:
-                        print("  ADD confirmed — SAVE & CONTINUE is enabled ✅")
-                    else:
-                        print("  WARNING: After ADD, SAVE & CONTINUE still disabled — row may not have been saved")
-                else:
-                    print("  ADD button not found — auto-continuing")
-            except Exception as _ae:
-                print(f"  ADD click error ({_ae}) — auto-continuing")
+                """)
+                if clicked:
+                    print("  ADD fired ✅ (JS click)")
+                    return True
 
-            time.sleep(0.8)
+                print("  ADD button not found or disabled")
+                return False
+
+            def _sc_enabled():
+                """Return True if SAVE & CONTINUE button exists and is not disabled."""
+                return bool(driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if ((t === 'SAVE & CONTINUE' ||
+                                (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                && btns[i].offsetParent !== null) {
+                            // Angular uses both the DOM property and the HTML attribute
+                            return !btns[i].disabled &&
+                                   btns[i].getAttribute('disabled') === null;
+                        }
+                    }
+                    return false;
+                """))
+
+            # First ADD attempt
+            add_clicked = _do_add_click()
+
+            if add_clicked:
+                # Wait up to 8 s for Angular to process the row and enable SAVE & CONTINUE
+                for _r in range(8):
+                    time.sleep(1.0)
+                    wait_spinner()
+                    if _sc_enabled():
+                        add_confirmed = True
+                        print("  ADD confirmed — SAVE & CONTINUE enabled ✅")
+                        break
+                    print(f"  Waiting for SAVE & CONTINUE to enable... ({_r+1}/8)")
+
+                if not add_confirmed:
+                    # Diagnose: show any visible validation errors
+                    err_txt = driver.execute_script("""
+                        var out = [];
+                        document.querySelectorAll(
+                            '.text-danger,.alert-danger,[class*="error"],[class*="invalid"]'
+                        ).forEach(function(el){
+                            var t = (el.textContent||'').trim();
+                            if (t && t.length > 2 && el.offsetParent) out.push(t.slice(0,80));
+                        });
+                        return out.join(' | ');
+                    """)
+                    if err_txt:
+                        print(f"  Validation errors found: {err_txt}")
+                    else:
+                        print("  No visible validation errors — retrying ADD once more...")
+
+                    # Retry ADD once more
+                    if _do_add_click():
+                        for _r2 in range(6):
+                            time.sleep(1.0)
+                            wait_spinner()
+                            if _sc_enabled():
+                                add_confirmed = True
+                                print("  ADD retry confirmed ✅")
+                                break
+                        if not add_confirmed:
+                            print("  WARNING: SAVE & CONTINUE still disabled after 2 ADD attempts")
+            else:
+                print("  ADD button not found — auto-continuing")
+
+            time.sleep(0.5)
             wait_spinner()
 
             # ── Step 5: SAVE & CONTINUE ────────────────────────────────────
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
 
-            # Try 0: ActionChains (most reliable for Angular — triggers real mouse events)
+            # Locate button
             act_btn = None
             for xp in [
                 "//button[normalize-space(.)='SAVE & CONTINUE']",
@@ -1446,86 +1536,99 @@ try:
                 driver.execute_script(
                     "arguments[0].scrollIntoView({block:'center'});", act_btn)
                 time.sleep(0.4)
+
+                # Try A: ActionChains
                 try:
                     ActionChains(driver).move_to_element(act_btn).pause(0.3).click().perform()
-                    time.sleep(1); act_saved = True
-                    print("  Activity SAVE — ActionChains ✅")
+                    print("  SAVE & CONTINUE — ActionChains ✅")
+                    act_saved = True
                 except: pass
 
-            # Try 1: JS click (fallback if ActionChains failed)
-            if not act_saved:
-                try:
-                    act_saved = bool(driver.execute_script("""
-                        var btns = document.querySelectorAll('button');
-                        for (var i = 0; i < btns.length; i++) {
-                            var t = (btns[i].textContent || '').trim().toUpperCase();
-                            if ((t === 'SAVE & CONTINUE' ||
-                                    (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
-                                    && btns[i].offsetParent !== null) {
-                                btns[i].scrollIntoView({block:'center'});
-                                btns[i].click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    """))
-                    if act_saved: print("  Activity SAVE — JS click ✅")
-                except: pass
+                # Try B: full MouseEvent dispatch
+                if not act_saved:
+                    try:
+                        driver.execute_script("""
+                            var el=arguments[0]; el.focus();
+                            ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(
+                                function(ev){
+                                    el.dispatchEvent(new MouseEvent(ev,
+                                        {view:window,bubbles:true,cancelable:true}));
+                                });
+                        """, act_btn)
+                        print("  SAVE & CONTINUE — MouseEvent ✅")
+                        act_saved = True
+                    except: pass
 
-            # Try 2: RETURN key
-            if not act_saved and act_btn:
-                try:
-                    driver.execute_script("arguments[0].focus();", act_btn)
-                    time.sleep(0.3)
-                    act_btn.send_keys(Keys.RETURN)
-                    time.sleep(1); act_saved = True
-                    print("  Activity SAVE — RETURN key ✅")
-                except: pass
+                # Try C: bare JS click
+                if not act_saved:
+                    try:
+                        driver.execute_script("arguments[0].click();", act_btn)
+                        print("  SAVE & CONTINUE — JS click ✅")
+                        act_saved = True
+                    except: pass
 
-            # Try 3: MouseEvent dispatch
-            if not act_saved and act_btn:
-                try:
-                    driver.execute_script("""
-                        var el=arguments[0]; el.focus();
-                        ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(function(ev){
-                            el.dispatchEvent(
-                                new MouseEvent(ev,{view:window,bubbles:true,cancelable:true}));
-                        });
-                    """, act_btn)
-                    time.sleep(1); act_saved = True
-                    print("  Activity SAVE — MouseEvent ✅")
-                except: pass
+                # Try D: RETURN key
+                if not act_saved:
+                    try:
+                        driver.execute_script("arguments[0].focus();", act_btn)
+                        time.sleep(0.2)
+                        act_btn.send_keys(Keys.RETURN)
+                        print("  SAVE & CONTINUE — RETURN key ✅")
+                        act_saved = True
+                    except: pass
 
             if not act_saved:
                 print("  WARNING: Activity SAVE & CONTINUE — all strategies failed")
 
-            time.sleep(1.5)
-            wait_spinner()
-
-            # ── Verify navigation away from Activity tab ───────────────────
-            # PREVIEW button only appears on Term Loan Details tab.
-            # If it's visible, SAVE & CONTINUE worked. If not, we're still on Activity.
-            nav_verified = bool(driver.execute_script("""
-                var btns = document.querySelectorAll('button');
-                for (var i = 0; i < btns.length; i++) {
-                    var t = (btns[i].textContent || '').trim().toUpperCase();
-                    if (t === 'PREVIEW' && btns[i].offsetParent !== null) return true;
-                }
-                // Also check Term Loan tab active state
-                var tabs = document.querySelectorAll('li a, .nav-link, [role="tab"]');
-                for (var i = 0; i < tabs.length; i++) {
-                    var t = (tabs[i].textContent || '').trim();
-                    if (t.indexOf('Term Loan') >= 0) {
-                        var cls = tabs[i].className || '';
-                        if (cls.indexOf('active') >= 0) return true;
+            # ── Verify navigation (SAVE & CONTINUE only works if it navigated) ──
+            # Wait up to 6 s for the Term Loan Details tab / PREVIEW button to appear.
+            nav_verified = False
+            for _nv in range(6):
+                time.sleep(1.0)
+                wait_spinner()
+                nav_verified = bool(driver.execute_script("""
+                    // PREVIEW button only appears on Term Loan Details tab
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if (t === 'PREVIEW' && btns[i].offsetParent !== null) return true;
                     }
-                }
-                return false;
-            """))
-            if nav_verified:
-                print("  Activity tab saved — now on Term Loan Details ✅")
-            else:
-                print("  WARNING: Still on Activity tab — SAVE & CONTINUE did not navigate")
+                    // Also accept active Term Loan tab
+                    var tabs = document.querySelectorAll('li a,.nav-link,[role="tab"]');
+                    for (var i = 0; i < tabs.length; i++) {
+                        var t = (tabs[i].textContent || '').trim();
+                        if (t.indexOf('Term Loan') >= 0 &&
+                                (tabs[i].className||'').indexOf('active') >= 0) return true;
+                    }
+                    return false;
+                """))
+                if nav_verified:
+                    print("  Activity tab saved — now on Term Loan Details ✅")
+                    break
+
+            if not nav_verified:
+                print("  WARNING: Still on Activity tab after SAVE & CONTINUE — retrying once..."  )
+                # One last retry: click again
+                if act_btn:
+                    try:
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});", act_btn)
+                        ActionChains(driver).move_to_element(act_btn).pause(0.4).click().perform()
+                        time.sleep(3)
+                        wait_spinner()
+                        nav_verified = bool(driver.execute_script("""
+                            var btns=document.querySelectorAll('button');
+                            for(var i=0;i<btns.length;i++){
+                                if((btns[i].textContent||'').trim().toUpperCase()==='PREVIEW'
+                                        && btns[i].offsetParent) return true;
+                            }
+                            return false;
+                        """))
+                        if nav_verified:
+                            print("  Navigation confirmed on retry ✅")
+                        else:
+                            print("  WARNING: SAVE & CONTINUE still not navigating")
+                    except: pass
 
             # OK popup after Activity save
             try:
