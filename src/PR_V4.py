@@ -1517,83 +1517,85 @@ try:
             wait_spinner()
 
             # ── Step 5: SAVE & CONTINUE ────────────────────────────────────
+            # DO NOT use ActionChains here — in VNC/noVNC the coordinate transform
+            # is wrong and the mouse lands on the profile icon (top-right) instead of
+            # the button (bottom-right). Use JS-only clicks which are coordinate-free.
             print("  Activity SAVE & CONTINUE...")
             act_saved = False
 
-            # Locate button
-            act_btn = None
-            for xp in [
-                "//button[normalize-space(.)='SAVE & CONTINUE']",
-                "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
-            ]:
-                try:
-                    for el in driver.find_elements(By.XPATH, xp):
-                        if el.is_displayed(): act_btn = el; break
-                except: pass
-                if act_btn: break
+            def _click_save_continue():
+                """Coordinate-free JS click for SAVE & CONTINUE. Returns True if fired."""
+                # Try A: bare JS click (fastest)
+                r = driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if ((t === 'SAVE & CONTINUE' ||
+                                (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                && btns[i].offsetParent !== null) {
+                            btns[i].click();
+                            return 'js:' + t;
+                        }
+                    }
+                    return null;
+                """)
+                if r:
+                    print(f"  SAVE & CONTINUE — JS click ✅ ({r})")
+                    return True
 
-            if act_btn:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});", act_btn)
-                time.sleep(0.4)
-
-                # Try A: ActionChains
-                try:
-                    ActionChains(driver).move_to_element(act_btn).pause(0.3).click().perform()
-                    print("  SAVE & CONTINUE — ActionChains ✅")
-                    act_saved = True
-                except: pass
-
-                # Try B: full MouseEvent dispatch
-                if not act_saved:
-                    try:
-                        driver.execute_script("""
-                            var el=arguments[0]; el.focus();
+                # Try B: full MouseEvent dispatch (Angular zone-safe)
+                r2 = driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if ((t === 'SAVE & CONTINUE' ||
+                                (t.indexOf('SAVE') >= 0 && t.indexOf('CONTINUE') >= 0))
+                                && btns[i].offsetParent !== null) {
+                            var el = btns[i]; el.focus();
                             ['mouseover','mouseenter','mousedown','mouseup','click'].forEach(
                                 function(ev){
                                     el.dispatchEvent(new MouseEvent(ev,
                                         {view:window,bubbles:true,cancelable:true}));
                                 });
-                        """, act_btn)
-                        print("  SAVE & CONTINUE — MouseEvent ✅")
-                        act_saved = True
-                    except: pass
+                            return 'mouseevent:' + t;
+                        }
+                    }
+                    return null;
+                """)
+                if r2:
+                    print(f"  SAVE & CONTINUE — MouseEvent ✅ ({r2})")
+                    return True
 
-                # Try C: bare JS click
-                if not act_saved:
+                # Try C: Selenium direct element click (no ActionChains, no coordinates)
+                for xp_sc in [
+                    "//button[normalize-space(.)='SAVE & CONTINUE']",
+                    "//button[contains(normalize-space(.),'SAVE') and contains(normalize-space(.),'CONTINUE')]",
+                ]:
                     try:
-                        driver.execute_script("arguments[0].click();", act_btn)
-                        print("  SAVE & CONTINUE — JS click ✅")
-                        act_saved = True
+                        for el_sc in driver.find_elements(By.XPATH, xp_sc):
+                            if el_sc.is_displayed():
+                                driver.execute_script("arguments[0].click();", el_sc)
+                                print("  SAVE & CONTINUE — Selenium JS click ✅")
+                                return True
                     except: pass
 
-                # Try D: RETURN key
-                if not act_saved:
-                    try:
-                        driver.execute_script("arguments[0].focus();", act_btn)
-                        time.sleep(0.2)
-                        act_btn.send_keys(Keys.RETURN)
-                        print("  SAVE & CONTINUE — RETURN key ✅")
-                        act_saved = True
-                    except: pass
+                print("  SAVE & CONTINUE — all JS strategies failed")
+                return False
 
-            if not act_saved:
-                print("  WARNING: Activity SAVE & CONTINUE — all strategies failed")
+            act_saved = _click_save_continue()
 
             # ── Verify navigation (SAVE & CONTINUE only works if it navigated) ──
-            # Wait up to 6 s for the Term Loan Details tab / PREVIEW button to appear.
+            # Wait up to 8 s for PREVIEW button or Term Loan tab to appear.
             nav_verified = False
-            for _nv in range(6):
+            for _nv in range(8):
                 time.sleep(1.0)
                 wait_spinner()
                 nav_verified = bool(driver.execute_script("""
-                    // PREVIEW button only appears on Term Loan Details tab
                     var btns = document.querySelectorAll('button');
                     for (var i = 0; i < btns.length; i++) {
                         var t = (btns[i].textContent || '').trim().toUpperCase();
                         if (t === 'PREVIEW' && btns[i].offsetParent !== null) return true;
                     }
-                    // Also accept active Term Loan tab
                     var tabs = document.querySelectorAll('li a,.nav-link,[role="tab"]');
                     for (var i = 0; i < tabs.length; i++) {
                         var t = (tabs[i].textContent || '').trim();
@@ -1607,28 +1609,22 @@ try:
                     break
 
             if not nav_verified:
-                print("  WARNING: Still on Activity tab after SAVE & CONTINUE — retrying once..."  )
-                # One last retry: click again
-                if act_btn:
-                    try:
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});", act_btn)
-                        ActionChains(driver).move_to_element(act_btn).pause(0.4).click().perform()
-                        time.sleep(3)
-                        wait_spinner()
-                        nav_verified = bool(driver.execute_script("""
-                            var btns=document.querySelectorAll('button');
-                            for(var i=0;i<btns.length;i++){
-                                if((btns[i].textContent||'').trim().toUpperCase()==='PREVIEW'
-                                        && btns[i].offsetParent) return true;
-                            }
-                            return false;
-                        """))
-                        if nav_verified:
-                            print("  Navigation confirmed on retry ✅")
-                        else:
-                            print("  WARNING: SAVE & CONTINUE still not navigating")
-                    except: pass
+                print("  WARNING: Still on Activity tab — retrying SAVE & CONTINUE (JS only)...")
+                _click_save_continue()
+                time.sleep(3)
+                wait_spinner()
+                nav_verified = bool(driver.execute_script("""
+                    var btns=document.querySelectorAll('button');
+                    for(var i=0;i<btns.length;i++){
+                        if((btns[i].textContent||'').trim().toUpperCase()==='PREVIEW'
+                                && btns[i].offsetParent) return true;
+                    }
+                    return false;
+                """))
+                if nav_verified:
+                    print("  Navigation confirmed on retry ✅")
+                else:
+                    print("  WARNING: SAVE & CONTINUE still not navigating")
 
             # OK popup after Activity save
             try:
