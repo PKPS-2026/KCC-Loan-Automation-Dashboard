@@ -12,6 +12,7 @@ from selenium.common.exceptions import (
 )
 import pandas as pd
 import time, os, re, sys, platform
+from portal_status import check_portal_status, DraftRecord, SubmittedRecord
 
 # Fix Windows terminal encoding — allows Unicode characters (─ separators etc.)
 if hasattr(sys.stdout, 'reconfigure'):
@@ -861,9 +862,10 @@ try:
     print(f"PROCESSING {len(df)} RECORDS")
     print("=" * 70)
 
-    successful = 0
-    skipped    = 0
-    failed     = 0
+    successful    = 0
+    skipped       = 0   # submitted / IS/PRI
+    draft_skipped = 0   # draft (not yet submitted)
+    failed        = 0
 
     for index, row in df.iterrows():
         print(f"\n{'─'*70}")
@@ -1242,39 +1244,15 @@ try:
             time.sleep(1.5)
             wait_spinner()
 
-            # ── Check for "already submitted" portal error → skip record ──
-            already_submitted = driver.execute_script("""
-                var msgs = document.querySelectorAll(
-                    '[class*="toast"],[class*="alert"],[class*="error"],[class*="warning"],'
-                    + '[class*="notification"],[class*="popup"],div,p,span');
-                var keywords = ['already been submitted','IS/PRI','Claim','Interest Cycle',
-                                'already submitted','submit the Claim'];
-                for (var i = 0; i < msgs.length; i++) {
-                    var t = (msgs[i].textContent || '').trim();
-                    if (t.length > 10 && t.length < 600) {
-                        for (var k = 0; k < keywords.length; k++) {
-                            if (t.indexOf(keywords[k]) >= 0) return t.slice(0, 200);
-                        }
-                    }
-                }
-                return null;
-            """)
-            if already_submitted:
-                # Dismiss the error toast — only click close buttons with
-                # explicit close text/class. Do NOT match empty-text buttons
-                # (e.g. profile avatar icon) which would open the profile menu.
-                driver.execute_script("""
-                    var closes = document.querySelectorAll(
-                        '[class*="close"],[class*="dismiss"],[aria-label="Close"],' +
-                        '[aria-label="close"],[data-dismiss]');
-                    for (var i = 0; i < closes.length; i++) {
-                        if (closes[i].offsetParent) { closes[i].click(); break; }
-                    }
-                """)
-                raise SkipRecord(
-                    f"Portal error — already submitted / IS/PRI pending: "
-                    f"{already_submitted[:100]}"
-                )
+            # ── Check for draft / already-submitted portal error ─────────────
+            # Delegated entirely to portal_status.py (separate module).
+            # Raises DraftRecord or SubmittedRecord; returns None if fresh.
+            try:
+                check_portal_status(driver)
+            except DraftRecord as _dr:
+                raise SkipRecord(f"Draft application — {str(_dr)[:100]}")
+            except SubmittedRecord as _sr:
+                raise SkipRecord(f"Already submitted / IS/PRI — {str(_sr)[:100]}")
 
             # ── Step 1: Select activity type pill if none is selected ──────
             # Portal usually pre-selects the correct activity from Aadhaar data.
@@ -1769,8 +1747,12 @@ try:
             accept_native_alert_if_any()
 
         except SkipRecord as sk:
-            print(f"  SKIPPED record {index+1}: {sk}")
-            skipped += 1
+            msg = str(sk)
+            print(f"  SKIPPED record {index+1}: {msg}")
+            if msg.startswith("Draft"):
+                draft_skipped += 1
+            else:
+                skipped += 1
             accept_native_alert_if_any()
             time.sleep(0.5)
 
@@ -1784,10 +1766,11 @@ try:
     print("\n" + "=" * 70)
     print("FINAL SUMMARY")
     print("=" * 70)
-    print(f"  Successful : {successful}")
-    print(f"  Skipped    : {skipped}")
-    print(f"  Failed     : {failed}")
-    print(f"  Total      : {len(df)}")
+    print(f"  Successful            : {successful}")
+    print(f"  Skipped (submitted)   : {skipped}")
+    print(f"  Skipped (draft)       : {draft_skipped}")
+    print(f"  Failed                : {failed}")
+    print(f"  Total                 : {len(df)}")
     print("=" * 70)
 
 except Exception as e:
