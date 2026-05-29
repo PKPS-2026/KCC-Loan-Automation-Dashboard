@@ -1260,14 +1260,15 @@ try:
                 return null;
             """)
             if already_submitted:
+                # Dismiss the error toast — only click close buttons with
+                # explicit close text/class. Do NOT match empty-text buttons
+                # (e.g. profile avatar icon) which would open the profile menu.
                 driver.execute_script("""
                     var closes = document.querySelectorAll(
-                        '[class*="close"],[class*="dismiss"],[aria-label="Close"],button');
+                        '[class*="close"],[class*="dismiss"],[aria-label="Close"],' +
+                        '[aria-label="close"],[data-dismiss]');
                     for (var i = 0; i < closes.length; i++) {
-                        var t = (closes[i].textContent || '').trim();
-                        if (t === 'x' || t === 'X' || t === '' || t === 'Close') {
-                            if (closes[i].offsetParent) { closes[i].click(); break; }
-                        }
+                        if (closes[i].offsetParent) { closes[i].click(); break; }
                     }
                 """)
                 raise SkipRecord(
