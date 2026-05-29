@@ -12,7 +12,7 @@ from selenium.common.exceptions import (
 )
 import pandas as pd
 import time, os, re, sys, platform
-from portal_status import check_portal_status, DraftRecord, SubmittedRecord
+from portal_status import check_portal_status, resume_draft, DraftRecord, SubmittedRecord
 
 # Fix Windows terminal encoding — allows Unicode characters (─ separators etc.)
 if hasattr(sys.stdout, 'reconfigure'):
@@ -1247,12 +1247,41 @@ try:
             # ── Check for draft / already-submitted portal error ─────────────
             # Delegated entirely to portal_status.py (separate module).
             # Raises DraftRecord or SubmittedRecord; returns None if fresh.
+            _portal_status_ok = True
             try:
                 check_portal_status(driver)
             except DraftRecord as _dr:
-                raise SkipRecord(f"Draft application — {str(_dr)[:100]}")
+                print(f"  Draft application detected — trying to resume...")
+                resumed = resume_draft(driver)
+                if resumed:
+                    print(f"  Draft resumed via '{resumed}' — continuing Activity fill")
+                    # Fall through: Activity fill code below will proceed normally
+                else:
+                    raise SkipRecord(f"Draft — no resume button found: {str(_dr)[:80]}")
             except SubmittedRecord as _sr:
-                raise SkipRecord(f"Already submitted / IS/PRI — {str(_sr)[:100]}")
+                # IS/PRI claim already exists (Activity was saved in a previous run).
+                # Try to find the PREVIEW button and complete the submission.
+                print(f"  IS/PRI detected — Activity already saved. Trying PREVIEW...")
+                _preview_ok = bool(driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].textContent || '').trim().toUpperCase();
+                        if (t === 'PREVIEW' && btns[i].offsetParent !== null
+                                && !btns[i].disabled) {
+                            btns[i].scrollIntoView({block:'center'});
+                            btns[i].click(); return true;
+                        }
+                    }
+                    return false;
+                """))
+                if _preview_ok:
+                    print("  PREVIEW clicked via IS/PRI path ✅ — skipping to Submit...")
+                    _portal_status_ok = False   # signal: jump past Activity fill to Submit
+                else:
+                    raise SkipRecord(
+                        f"IS/PRI — Activity already submitted and no PREVIEW button "
+                        f"found: {str(_sr)[:80]}"
+                    )
 
             # ── Step 1: Select activity type pill if none is selected ──────
             # Portal usually pre-selects the correct activity from Aadhaar data.

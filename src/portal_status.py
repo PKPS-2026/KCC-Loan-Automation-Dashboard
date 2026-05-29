@@ -1,27 +1,19 @@
 """
 portal_status.py — fasalrin.gov.in KCC Application Status Checker
 ──────────────────────────────────────────────────────────────────
-Detects whether a farmer's loan application is in one of three states:
-
+Detects whether a farmer's loan application is:
   fresh     → no prior application; proceed with normal form fill
-  draft     → application started but "Review & Submit" not yet done
+  draft     → application started but Review & Submit not done yet
   submitted → IS/PRI claim already created (Activity saved or fully submitted)
 
 Kept entirely separate from PR_V4.py so draft logic can evolve on its own.
 
 Usage in PR_V4.py:
-    from portal_status import check_portal_status, DraftRecord, SubmittedRecord
-
-    try:
-        check_portal_status(driver)          # raises or returns None
-    except DraftRecord as d:
-        raise SkipRecord(f"Draft — {d}")
-    except SubmittedRecord as s:
-        raise SkipRecord(f"Submitted — {s}")
+    from portal_status import check_portal_status, resume_draft, DraftRecord, SubmittedRecord
 """
 
 # ── Draft keyword signals ─────────────────────────────────────────────────────
-# Appear as toast / inline text when the farmer has a partially-saved application.
+# Appear as toast/inline text when the farmer has a partially-saved application.
 # All matches are case-insensitive.
 DRAFT_KEYWORDS = [
     "application already in progress",
@@ -37,7 +29,7 @@ DRAFT_KEYWORDS = [
     "edit draft",
 ]
 
-# Button labels that indicate a draft "Resume / Edit" option exists.
+# Button labels that indicate a draft "Resume / Edit" option.
 # Exact upper-case match so we don't catch unrelated buttons.
 DRAFT_BUTTON_TEXTS = [
     "EDIT DRAFT",
@@ -48,15 +40,19 @@ DRAFT_BUTTON_TEXTS = [
 ]
 
 # ── Submitted keyword signals ─────────────────────────────────────────────────
-# Appear when the IS/PRI claim has been created (Activity saved OR final submit
-# done).  Portal blocks a second submission with these messages.
+# These appear when the IS/PRI claim has been created (Activity tab saved or
+# final submit done). Must be SPECIFIC phrases — not bare "IS/PRI" or "Claim"
+# which also appear in the portal's navigation menu sidebar.
 SUBMITTED_KEYWORDS = [
     "already been submitted",
-    "IS/PRI",
-    "Claim",
-    "Interest Cycle",
     "already submitted",
     "submit the Claim",
+    "Interest Cycle",
+    "IS/PRI Claim has",
+    "IS/PRI claim already",
+    "claim has already been",
+    "You have already submitted",
+    "application has been submitted",
 ]
 
 
@@ -95,6 +91,13 @@ def check_portal_status(driver):
     Call this after the Activity tab has loaded (right after Financial Details
     SAVE & CONTINUE) and before attempting ADD / activity form fill.
 
+    Key design:
+      - Does NOT scan broad div/span/p tags — those include the nav sidebar
+        which always contains "IS/PRI Claim Application" as a menu link.
+      - Does NOT use bare keywords "IS/PRI" or "Claim" — too generic.
+      - Skips elements inside nav / aside / header / sidebar containers.
+      - Only trusts specific error/toast/modal class elements.
+
     Raises:
         DraftRecord      if a draft application is detected.
         SubmittedRecord  if an already-submitted (IS/PRI) record is detected.
@@ -107,20 +110,36 @@ def check_portal_status(driver):
         var DRAFT_BTNS  = arguments[1];
         var SUBMIT_KEYS = arguments[2];
 
+        // ── Only scan elements that are actual error/toast/modal containers.
+        // Deliberately excludes div/p/span/h* to avoid false positives from
+        // the portal navigation sidebar (which always shows "IS/PRI Claim
+        // Application" as a menu item).
         var nodes = document.querySelectorAll(
             '[class*="toast"],[class*="alert"],[class*="error"],[class*="warning"],'
           + '[class*="notification"],[class*="popup"],[class*="modal"],'
-          + '[class*="message"],[class*="info"],div,p,span,h1,h2,h3,h4,h5'
+          + '[class*="snack"],[class*="banner"],[class*="flash"],'
+          + 'mat-snack-bar-container,mat-dialog-container'
         );
 
-        var draftMatch    = null;
+        var draftMatch     = null;
         var submittedMatch = null;
 
         for (var i = 0; i < nodes.length; i++) {
             var el = nodes[i];
             if (el.offsetParent === null) continue;          // hidden element
+
+            // Skip anything inside nav / sidebar / header — those areas show
+            // menu links that match our keywords (e.g. "IS/PRI Claim Application").
+            if (el.closest) {
+                var nav = el.closest(
+                    'nav, aside, header, [class*="sidebar"], '
+                  + '[class*="nav-wrap"], [class*="left-menu"], '
+                  + '[role="navigation"], [class*="breadcrumb"]');
+                if (nav) continue;
+            }
+
             var t  = (el.textContent || '').trim();
-            if (t.length < 8 || t.length > 800) continue;   // too short/long
+            if (t.length < 8 || t.length > 500) continue;   // too short / is a whole page
             var tl = t.toLowerCase();
 
             if (!draftMatch) {
@@ -140,7 +159,8 @@ def check_portal_status(driver):
             if (draftMatch && submittedMatch) break;
         }
 
-        // Also scan button text for draft resume / edit buttons
+        // Also scan visible button text for draft resume / edit buttons.
+        // Buttons are NOT in the nav sidebar so safe to scan globally.
         if (!draftMatch) {
             var btns = document.querySelectorAll('button');
             for (var b = 0; b < btns.length; b++) {
@@ -155,8 +175,7 @@ def check_portal_status(driver):
             }
         }
 
-        // Draft takes priority — safer to mis-classify submitted as draft
-        // than to mis-classify draft as submitted.
+        // Draft takes priority — safer to mis-classify submitted as draft.
         if (draftMatch)     return ['draft',     draftMatch];
         if (submittedMatch) return ['submitted', submittedMatch];
         return null;
@@ -167,7 +186,7 @@ def check_portal_status(driver):
     )
 
     if result is None:
-        return  # fresh — caller proceeds normally
+        return  # fresh record — caller proceeds normally
 
     status, msg = result[0], result[1]
     _dismiss_error_toast(driver)
@@ -175,3 +194,31 @@ def check_portal_status(driver):
     if status == "draft":
         raise DraftRecord(msg)
     raise SubmittedRecord(msg)
+
+
+def resume_draft(driver):
+    """
+    Click the RESUME / EDIT DRAFT button on a draft application popup.
+
+    Returns:
+        str   button text that was clicked, e.g. "EDIT DRAFT"
+        None  if no resume button was found
+    """
+    return driver.execute_script("""
+        var candidates = [
+            'EDIT DRAFT','RESUME DRAFT','RESUME APPLICATION',
+            'CONTINUE DRAFT','CONTINUE APPLICATION','RESUME','EDIT'
+        ];
+        var btns = document.querySelectorAll('button');
+        for (var b = 0; b < btns.length; b++) {
+            if (btns[b].offsetParent === null) continue;
+            var bt = (btns[b].textContent || '').trim().toUpperCase();
+            for (var c = 0; c < candidates.length; c++) {
+                if (bt === candidates[c]) {
+                    btns[b].click();
+                    return bt;
+                }
+            }
+        }
+        return null;
+    """)
